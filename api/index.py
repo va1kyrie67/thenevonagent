@@ -134,14 +134,36 @@ class handler(BaseHTTPRequestHandler):
         is_dm = channel.startswith("D") or event.get("channel_type") == "im"
         is_mention = event_type == "app_mention" or f"<@{BOT_USER_ID}>" in text
 
+        debug_info = {}
         if is_dm or is_mention:
-            print(f"[REPLYING] Channel: {channel} | User: {user} | Text: {text}", flush=True)
-            reply = generate_ai_reply(text)
-            reply_thread = thread_ts if not is_dm else None
-            post_slack_message(channel, reply, thread_ts=reply_thread)
+            try:
+                reply = generate_ai_reply(text)
+                debug_info["reply"] = reply
+                reply_thread = thread_ts if not is_dm else None
+                
+                # Inline post_slack_message to capture its response
+                url = "https://slack.com/api/chat.postMessage"
+                headers = {
+                    "Authorization": f"Bearer {BOT_TOKEN}",
+                    "Content-Type": "application/json; charset=utf-8"
+                }
+                payload = {"channel": channel, "text": reply}
+                if reply_thread:
+                    payload["thread_ts"] = reply_thread
+                
+                req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
+                try:
+                    with urllib.request.urlopen(req) as res:
+                        res_data = json.loads(res.read().decode("utf-8"))
+                        debug_info["slack_api"] = res_data
+                except Exception as ex:
+                    debug_info["slack_error"] = str(ex)
+                    
+            except Exception as e:
+                debug_info["error"] = str(e)
 
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.end_headers()
-        self.wfile.write(json.dumps({"status": "ok"}).encode())
+        self.wfile.write(json.dumps({"status": "ok", "debug": debug_info}).encode())
 
