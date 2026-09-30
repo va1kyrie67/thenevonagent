@@ -25,7 +25,33 @@ Key Guidelines:
 
 PROCESSED_TS = set()
 
-def generate_ai_reply(user_text):
+def get_slack_history(channel_id, thread_ts=None):
+    try:
+        if thread_ts:
+            url = f"https://slack.com/api/conversations.replies?channel={channel_id}&ts={thread_ts}&limit=6"
+        else:
+            url = f"https://slack.com/api/conversations.history?channel={channel_id}&limit=6"
+        
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {BOT_TOKEN}"})
+        with urllib.request.urlopen(req, timeout=2) as res:
+            data = json.loads(res.read().decode("utf-8"))
+            if data.get("ok"):
+                messages = data.get("messages", [])
+                if not thread_ts:
+                    messages.reverse()
+                
+                transcript = []
+                for m in messages[-6:]:
+                    speaker = "Agent" if m.get("bot_id") else "User"
+                    m_text = m.get("text", "").replace(f"<@{BOT_USER_ID}>", "").strip()
+                    if m_text:
+                        transcript.append(f"{speaker}: {m_text}")
+                return "\n".join(transcript)
+    except Exception as e:
+        print("History error:", e)
+    return ""
+
+def generate_ai_reply(user_text, history_context=""):
     clean_text = user_text.replace(f"<@{BOT_USER_ID}>", "").strip()
     if not clean_text:
         clean_text = "hello"
@@ -33,7 +59,12 @@ def generate_ai_reply(user_text):
     if not ai_client:
         return f"🤖 *The Nevon Agent:* (GEMINI_API_KEY not configured)."
 
-    full_prompt = f"{SYSTEM_PROMPT}\n\nUser Question:\n{clean_text}"
+    prompt_parts = [SYSTEM_PROMPT]
+    if history_context:
+        prompt_parts.append(f"--- Recent Conversation Context ---\n{history_context}\n-----------------------------------")
+    
+    prompt_parts.append(f"Current User Message: {clean_text}")
+    full_prompt = "\n\n".join(prompt_parts)
 
     errors = []
     
@@ -153,7 +184,8 @@ class handler(BaseHTTPRequestHandler):
         debug_info = {}
         if is_dm or is_mention:
             try:
-                reply = generate_ai_reply(text)
+                history = get_slack_history(channel, thread_ts)
+                reply = generate_ai_reply(text, history)
                 debug_info["reply"] = reply
                 reply_thread = thread_ts if not is_dm else None
                 
