@@ -11,8 +11,8 @@ BOT_USER_ID = os.environ.get("SLACK_BOT_USER_ID", "U0C48KSS0G3")
 
 ai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
-# Ultra-fast models
-MODEL_LIST = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+# Ultra-fast models available in 2026
+MODEL_LIST = ["gemini-2.5-flash-lite", "gemini-3.5-flash-lite", "gemini-flash-lite-latest"]
 
 SYSTEM_PROMPT = """You are The Nevon Agent (Ali Ai), a senior AI Software Architect, Senior Product Designer, and Business Strategist.
 You specialize in clean code, robust system design, UI/UX systems, business workflows, and technical problem solving.
@@ -38,13 +38,6 @@ def generate_ai_reply(user_text):
 
     errors = []
     
-    # DEBUG: Get all models
-    try:
-        models = [m.name for m in ai_client.models.list()]
-        errors.append(f"Available: {models}")
-    except Exception as e:
-        errors.append(f"List error: {e}")
-
     for model_name in MODEL_LIST:
         try:
             response = ai_client.models.generate_content(
@@ -54,10 +47,10 @@ def generate_ai_reply(user_text):
             if response and response.text:
                 return response.text.strip()
         except Exception as e:
-            errors.append(str(e))
+            errors.append(f"{model_name}: {str(e)}")
             continue
 
-    return f"🤖 *The Nevon Agent:* Error generating AI. Errors: {errors}. Received your message: '{clean_text}'"
+    return f"🤖 *The Nevon Agent:* System is currently overloaded. Please try again in a few seconds! (Errors: {errors})"
 
 def post_slack_message(channel, text, thread_ts=None):
     if not BOT_TOKEN:
