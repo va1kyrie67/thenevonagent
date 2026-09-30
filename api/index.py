@@ -44,7 +44,7 @@ def generate_ai_reply(user_text):
             if response and response.text:
                 return response.text.strip()
         except Exception as e:
-            print(f"Model {model_name} failed: {e}", flush=True)
+            print(f"Model {model_name} error: {e}", flush=True)
             continue
 
     return f"🤖 *The Nevon Agent:* Received your request: '{clean_text}'. How can I assist you further?"
@@ -101,7 +101,17 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"challenge": challenge}).encode())
             return
 
-        # 2. Extract Event Data
+        # 2. IMMEDIATE ACK-FIRST PATTERN:
+        # Acknowledge Slack immediately within 30ms to prevent the 3-second HTTP timeout!
+        ack_payload = json.dumps({"status": "ok"}).encode()
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.send_header('Content-Length', str(len(ack_payload)))
+        self.end_headers()
+        self.wfile.write(ack_payload)
+        self.wfile.flush()
+
+        # 3. Extract and Process Event Asynchronously
         event = data.get("event", {})
         event_type = event.get("type")
         user = event.get("user")
@@ -113,20 +123,11 @@ class handler(BaseHTTPRequestHandler):
 
         # Ignore bot's own messages or sub-events
         if not event or user == BOT_USER_ID or event.get("bot_id") or subtype == "bot_message":
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "ignored_bot"}).encode())
             return
 
-        # Deduplicate if already processed
+        # Deduplicate
         if ts and ts in PROCESSED_TS:
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "duplicate"}).encode())
             return
-
         if ts:
             PROCESSED_TS.add(ts)
 
@@ -135,14 +136,7 @@ class handler(BaseHTTPRequestHandler):
         is_mention = event_type == "app_mention" or f"<@{BOT_USER_ID}>" in text
 
         if is_dm or is_mention:
-            print(f"[EVENT] Channel: {channel} | User: {user} | Text: {text}", flush=True)
+            print(f"[PROCESSING EVENT] Channel: {channel} | User: {user} | Text: {text}", flush=True)
             reply = generate_ai_reply(text)
-            
-            # For DMs, don't force thread_ts so messages appear directly in chat
             reply_thread = thread_ts if not is_dm else None
             post_slack_message(channel, reply, thread_ts=reply_thread)
-
-        self.send_response(200)
-        self.send_header('Content-type', 'application/json')
-        self.end_headers()
-        self.wfile.write(json.dumps({"status": "ok"}).encode())
