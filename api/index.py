@@ -102,50 +102,7 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"challenge": challenge}).encode())
             return
 
-        # Check if we are running in the background (self-triggered)
-        is_background = self.headers.get('X-Background') == 'true'
-
-        if not is_background:
-            # We are the front-facing receiver.
-            # 2. Extract Event Data just to check if it's valid
-            event = data.get("event", {})
-            user = event.get("user")
-            subtype = event.get("subtype")
-            
-            # Ignore bot's own messages quickly
-            if not event or user == BOT_USER_ID or event.get("bot_id") or subtype == "bot_message":
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "ignored"}).encode())
-                return
-
-            # Trigger background execution!
-            host = self.headers.get('Host')
-            proto = self.headers.get('X-Forwarded-Proto', 'https')
-            if host:
-                bg_url = f"{proto}://{host}{self.path}"
-                req = urllib.request.Request(bg_url, data=body.encode('utf-8'), headers={
-                    "Content-Type": "application/json",
-                    "X-Background": "true"
-                })
-                try:
-                    # Timeout of 0.2s: we don't care about the response, just need to trigger it
-                    urllib.request.urlopen(req, timeout=0.2)
-                except Exception:
-                    # Expected timeout because we return 200 early in the background or just drop it
-                    pass
-
-            # Respond to Slack immediately (within <1 second)!
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "ok"}).encode())
-            return
-
-        # ==========================================
-        # BACKGROUND EXECUTION (X-Background: true)
-        # ==========================================
+        # 2. Extract Event Data
         event = data.get("event", {})
         event_type = event.get("type")
         user = event.get("user")
@@ -153,7 +110,16 @@ class handler(BaseHTTPRequestHandler):
         text = event.get("text", "")
         ts = event.get("ts")
         thread_ts = event.get("thread_ts")
+        subtype = event.get("subtype")
         
+        # Ignore bot's own messages or sub-events
+        if not event or user == BOT_USER_ID or event.get("bot_id") or subtype == "bot_message":
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ignored"}).encode())
+            return
+            
         # Deduplicate to prevent double-posting
         if ts and ts in PROCESSED_TS:
             self.send_response(200)
@@ -169,7 +135,7 @@ class handler(BaseHTTPRequestHandler):
         is_mention = event_type == "app_mention" or f"<@{BOT_USER_ID}>" in text
 
         if is_dm or is_mention:
-            print(f"[BACKGROUND] Channel: {channel} | User: {user} | Text: {text}", flush=True)
+            print(f"[REPLYING] Channel: {channel} | User: {user} | Text: {text}", flush=True)
             reply = generate_ai_reply(text)
             reply_thread = thread_ts if not is_dm else None
             post_slack_message(channel, reply, thread_ts=reply_thread)
