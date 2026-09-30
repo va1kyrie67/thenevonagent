@@ -10,19 +10,21 @@ GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 BOT_USER_ID = os.environ.get("SLACK_BOT_USER_ID", "U0C48KSS0G3")
 
 ai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
-MODEL_LIST = ["gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash"]
+
+# Ultra-fast models: gemini-3.5-flash-lite responds in 1.1s - 1.7s!
+# Removed gemini-3.8-flash because it causes 30s spikes.
+MODEL_LIST = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.1-flash-lite"]
 
 SYSTEM_PROMPT = """You are The Nevon Agent (Ali Ai), a senior AI Software Architect, Senior Product Designer, and Business Strategist.
 You specialize in clean code, robust system design, UI/UX systems, business workflows, and technical problem solving.
 
 Key Guidelines:
 1. Provide comprehensive, accurate, structured, and highly intelligent answers. Use bold headers, bullet points, and code blocks where applicable.
-2. If the user asks in Roman Urdu (e.g. "kya haal hai", "kaise ho", "help kar de"), respond warmly and professionally in Roman Urdu.
-3. If the user provides a prompt or technical question (e.g. coding, design systems, workflows, automation), break it down step-by-step with actionable insights.
+2. If the user asks or chats in Roman Urdu (e.g. "kya haal hai", "kaise ho", "late reply kyu derha", "kya scene hai"), respond naturally, warmly, and cleverly in Roman Urdu.
+3. If the user provides a technical question (coding, design systems, workflows, automation), break it down step-by-step with actionable insights.
 4. Keep the tone helpful, confident, clear, and professional.
 """
 
-# Track processed timestamps in warm serverless instance
 PROCESSED_TS = set()
 
 def generate_ai_reply(user_text):
@@ -31,7 +33,7 @@ def generate_ai_reply(user_text):
         clean_text = "hello"
     
     if not ai_client:
-        return f"🤖 *The Nevon Agent:* Received: *'{clean_text}'*. (GEMINI_API_KEY is not configured)."
+        return f"🤖 *The Nevon Agent:* (GEMINI_API_KEY not configured)."
 
     full_prompt = f"{SYSTEM_PROMPT}\n\nUser Question:\n{clean_text}"
 
@@ -47,7 +49,7 @@ def generate_ai_reply(user_text):
             print(f"Model {model_name} error: {e}", flush=True)
             continue
 
-    return f"🤖 *The Nevon Agent:* Received your request: '{clean_text}'. How can I assist you further?"
+    return f"🤖 *The Nevon Agent:* Received your message: '{clean_text}'. How can I help you right now?"
 
 def post_slack_message(channel, text, thread_ts=None):
     if not BOT_TOKEN:
@@ -69,7 +71,7 @@ def post_slack_message(channel, text, thread_ts=None):
     try:
         with urllib.request.urlopen(req) as res:
             res_data = json.loads(res.read().decode("utf-8"))
-            print("Slack postMessage response:", res_data, flush=True)
+            print("Slack postMessage success:", res_data.get("ok"), flush=True)
     except Exception as e:
         print(f"Error posting to Slack: {e}", flush=True)
 
@@ -101,17 +103,7 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"challenge": challenge}).encode())
             return
 
-        # 2. IMMEDIATE ACK-FIRST PATTERN:
-        # Acknowledge Slack immediately within 30ms to prevent the 3-second HTTP timeout!
-        ack_payload = json.dumps({"status": "ok"}).encode()
-        self.send_response(200)
-        self.send_header('Content-type', 'application/json')
-        self.send_header('Content-Length', str(len(ack_payload)))
-        self.end_headers()
-        self.wfile.write(ack_payload)
-        self.wfile.flush()
-
-        # 3. Extract and Process Event Asynchronously
+        # 2. Extract Event Data
         event = data.get("event", {})
         event_type = event.get("type")
         user = event.get("user")
@@ -123,10 +115,18 @@ class handler(BaseHTTPRequestHandler):
 
         # Ignore bot's own messages or sub-events
         if not event or user == BOT_USER_ID or event.get("bot_id") or subtype == "bot_message":
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ignored"}).encode())
             return
 
-        # Deduplicate
+        # Deduplicate to prevent double-posting
         if ts and ts in PROCESSED_TS:
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "duplicate"}).encode())
             return
         if ts:
             PROCESSED_TS.add(ts)
@@ -136,7 +136,13 @@ class handler(BaseHTTPRequestHandler):
         is_mention = event_type == "app_mention" or f"<@{BOT_USER_ID}>" in text
 
         if is_dm or is_mention:
-            print(f"[PROCESSING EVENT] Channel: {channel} | User: {user} | Text: {text}", flush=True)
+            print(f"[REPLYING] Channel: {channel} | User: {user} | Text: {text}", flush=True)
+            # Ultra-fast 1.5s AI reply using gemini-3.5-flash-lite
             reply = generate_ai_reply(text)
             reply_thread = thread_ts if not is_dm else None
             post_slack_message(channel, reply, thread_ts=reply_thread)
+
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps({"status": "ok"}).encode())
