@@ -3,12 +3,15 @@ import urllib.request
 import json
 import os
 import sys
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from google import genai
 
-# Fetch tokens strictly from Environment Variables (GitHub Push Protection compliant)
+# Fetch tokens strictly from Environment Variables
 BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 BOT_USER_ID = os.environ.get("SLACK_BOT_USER_ID", "U0C48KSS0G3")
+PORT = int(os.environ.get("PORT", 10000))
 
 if not BOT_TOKEN:
     print("ERROR: SLACK_BOT_TOKEN environment variable not set!", flush=True)
@@ -40,6 +43,20 @@ def log(msg):
         print(msg, flush=True)
     except Exception:
         print(str(msg).encode("ascii", "ignore").decode("ascii"), flush=True)
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"The Nevon Agent is live and running 24/7!")
+    def log_message(self, format, *args):
+        return  # Silence health check logs
+
+def run_http_server():
+    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+    log(f"Health check HTTP server running on port {PORT}...")
+    server.serve_forever()
 
 def slack_api_call(endpoint, data=None):
     if not BOT_TOKEN:
@@ -149,6 +166,10 @@ def main():
     log("The Nevon Agent - Slack 24/7 Cloud Daemon Starting...")
     log("=========================================")
     
+    # Start background HTTP server for Render Free Web Service health checks
+    t = threading.Thread(target=run_http_server, daemon=True)
+    t.start()
+
     channels = get_channels()
     log(f"Listening on {len(channels)} channels/DMs...")
 
