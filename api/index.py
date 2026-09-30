@@ -36,6 +36,7 @@ def generate_ai_reply(user_text):
 
     full_prompt = f"{SYSTEM_PROMPT}\n\nUser Question:\n{clean_text}"
 
+    errors = []
     for model_name in MODEL_LIST:
         try:
             response = ai_client.models.generate_content(
@@ -45,10 +46,10 @@ def generate_ai_reply(user_text):
             if response and response.text:
                 return response.text.strip()
         except Exception as e:
-            print(f"Model {model_name} error: {e}", flush=True)
+            errors.append(str(e))
             continue
 
-    return f"🤖 *The Nevon Agent:* Received your message: '{clean_text}'. How can I help you right now?"
+    return f"🤖 *The Nevon Agent:* Error generating AI. Errors: {errors}. Received your message: '{clean_text}'"
 
 def post_slack_message(channel, text, thread_ts=None):
     if not BOT_TOKEN:
