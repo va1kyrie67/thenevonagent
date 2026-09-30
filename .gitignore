@@ -1,0 +1,7 @@
+bot.log
+run_bot.bat
+start_silent.vbs
+stop_bot.bat
+__pycache__/
+*.pyc
+.env
