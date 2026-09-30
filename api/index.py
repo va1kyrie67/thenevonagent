@@ -14,7 +14,7 @@ ai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 # Ultra-fast models available in 2026
 MODEL_LIST = ["gemini-2.5-flash-lite", "gemini-3.5-flash-lite", "gemini-flash-lite-latest"]
 
-SYSTEM_PROMPT = """You are The Nevon Agent (Ali Ai).
+SYSTEM_PROMPT = """You are a highly capable AI assistant.
 
 Key Guidelines:
 1. Language Matching: If the user speaks in English, reply in professional English. If the user speaks in Roman Urdu, reply naturally in Roman Urdu.
