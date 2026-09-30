@@ -94,6 +94,14 @@ class handler(BaseHTTPRequestHandler):
             self.send_response(400)
             self.end_headers()
             return
+            
+        # Ignore retries from Slack to prevent double posting on slow AI replies
+        if self.headers.get('X-Slack-Retry-Num'):
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ignored_retry"}).encode())
+            return
 
         # 1. Slack URL Verification Challenge
         if data.get("type") == "url_verification":
