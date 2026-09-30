@@ -11,8 +11,8 @@ BOT_USER_ID = os.environ.get("SLACK_BOT_USER_ID", "U0C48KSS0G3")
 
 ai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
-# Ultra-fast models: gemini-1.5-flash-8b responds in ~800ms!
-MODEL_LIST = ["gemini-1.5-flash-8b", "gemini-1.5-flash"]
+# Ultra-fast models
+MODEL_LIST = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
 
 SYSTEM_PROMPT = """You are The Nevon Agent (Ali Ai), a senior AI Software Architect, Senior Product Designer, and Business Strategist.
 You specialize in clean code, robust system design, UI/UX systems, business workflows, and technical problem solving.
