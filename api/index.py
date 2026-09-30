@@ -22,6 +22,9 @@ Key Guidelines:
 4. Keep the tone helpful, confident, clear, and professional.
 """
 
+# Track processed timestamps in warm serverless instance
+PROCESSED_TS = set()
+
 def generate_ai_reply(user_text):
     clean_text = user_text.replace(f"<@{BOT_USER_ID}>", "").strip()
     if not clean_text:
@@ -41,13 +44,14 @@ def generate_ai_reply(user_text):
             if response and response.text:
                 return response.text.strip()
         except Exception as e:
-            print(f"Error with {model_name}: {e}")
+            print(f"Model {model_name} failed: {e}", flush=True)
             continue
 
-    return f"🤖 *The Nevon Agent:* I received your request: '{clean_text}'. How can I assist you further?"
+    return f"🤖 *The Nevon Agent:* Received your request: '{clean_text}'. How can I assist you further?"
 
 def post_slack_message(channel, text, thread_ts=None):
     if not BOT_TOKEN:
+        print("ERROR: BOT_TOKEN is missing", flush=True)
         return
     url = "https://slack.com/api/chat.postMessage"
     headers = {
@@ -63,9 +67,11 @@ def post_slack_message(channel, text, thread_ts=None):
     
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
     try:
-        urllib.request.urlopen(req)
+        with urllib.request.urlopen(req) as res:
+            res_data = json.loads(res.read().decode("utf-8"))
+            print("Slack postMessage response:", res_data, flush=True)
     except Exception as e:
-        print(f"Error posting to Slack: {e}")
+        print(f"Error posting to Slack: {e}", flush=True)
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -80,46 +86,61 @@ class handler(BaseHTTPRequestHandler):
         
         try:
             data = json.loads(body)
-        except Exception:
+        except Exception as e:
+            print("JSON parse error:", e, flush=True)
             self.send_response(400)
             self.end_headers()
             return
 
         # 1. Slack URL Verification Challenge
         if data.get("type") == "url_verification":
+            challenge = data.get("challenge")
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({"challenge": data.get("challenge")}).encode())
+            self.wfile.write(json.dumps({"challenge": challenge}).encode())
             return
 
-        # 2. Avoid duplicate Slack retries
-        if self.headers.get('X-Slack-Retry-Num'):
-            self.send_response(200)
-            self.end_headers()
-            return
-
-        # 3. Process Slack Event
+        # 2. Extract Event Data
         event = data.get("event", {})
         event_type = event.get("type")
         user = event.get("user")
-        channel = event.get("channel")
+        channel = str(event.get("channel", ""))
         text = event.get("text", "")
         ts = event.get("ts")
-        thread_ts = event.get("thread_ts", ts)
+        thread_ts = event.get("thread_ts")
+        subtype = event.get("subtype")
 
-        # Ignore bot's own messages
-        if user == BOT_USER_ID or event.get("bot_id"):
+        # Ignore bot's own messages or sub-events
+        if not event or user == BOT_USER_ID or event.get("bot_id") or subtype == "bot_message":
             self.send_response(200)
+            self.send_header('Content-type', 'application/json')
             self.end_headers()
+            self.wfile.write(json.dumps({"status": "ignored_bot"}).encode())
             return
 
-        if event_type in ["app_mention", "message"]:
-            channel_type = event.get("channel_type")
-            is_im = channel_type == "im" or event_type == "app_mention" or f"<@{BOT_USER_ID}>" in text
-            if is_im:
-                reply = generate_ai_reply(text)
-                post_slack_message(channel, reply, thread_ts=thread_ts if channel_type != "im" else None)
+        # Deduplicate if already processed
+        if ts and ts in PROCESSED_TS:
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "duplicate"}).encode())
+            return
+
+        if ts:
+            PROCESSED_TS.add(ts)
+
+        # Check if direct message (D...) or mention
+        is_dm = channel.startswith("D") or event.get("channel_type") == "im"
+        is_mention = event_type == "app_mention" or f"<@{BOT_USER_ID}>" in text
+
+        if is_dm or is_mention:
+            print(f"[EVENT] Channel: {channel} | User: {user} | Text: {text}", flush=True)
+            reply = generate_ai_reply(text)
+            
+            # For DMs, don't force thread_ts so messages appear directly in chat
+            reply_thread = thread_ts if not is_dm else None
+            post_slack_message(channel, reply, thread_ts=reply_thread)
 
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
