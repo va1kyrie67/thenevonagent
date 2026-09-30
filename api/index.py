@@ -11,9 +11,8 @@ BOT_USER_ID = os.environ.get("SLACK_BOT_USER_ID", "U0C48KSS0G3")
 
 ai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
-# Ultra-fast models: gemini-3.5-flash-lite responds in 1.1s - 1.7s!
-# Removed gemini-3.8-flash because it causes 30s spikes.
-MODEL_LIST = ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.1-flash-lite"]
+# Ultra-fast models: gemini-1.5-flash-8b responds in ~800ms!
+MODEL_LIST = ["gemini-1.5-flash-8b", "gemini-1.5-flash"]
 
 SYSTEM_PROMPT = """You are The Nevon Agent (Ali Ai), a senior AI Software Architect, Senior Product Designer, and Business Strategist.
 You specialize in clean code, robust system design, UI/UX systems, business workflows, and technical problem solving.
@@ -103,7 +102,50 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"challenge": challenge}).encode())
             return
 
-        # 2. Extract Event Data
+        # Check if we are running in the background (self-triggered)
+        is_background = self.headers.get('X-Background') == 'true'
+
+        if not is_background:
+            # We are the front-facing receiver.
+            # 2. Extract Event Data just to check if it's valid
+            event = data.get("event", {})
+            user = event.get("user")
+            subtype = event.get("subtype")
+            
+            # Ignore bot's own messages quickly
+            if not event or user == BOT_USER_ID or event.get("bot_id") or subtype == "bot_message":
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "ignored"}).encode())
+                return
+
+            # Trigger background execution!
+            host = self.headers.get('Host')
+            proto = self.headers.get('X-Forwarded-Proto', 'https')
+            if host:
+                bg_url = f"{proto}://{host}{self.path}"
+                req = urllib.request.Request(bg_url, data=body.encode('utf-8'), headers={
+                    "Content-Type": "application/json",
+                    "X-Background": "true"
+                })
+                try:
+                    # Timeout of 0.2s: we don't care about the response, just need to trigger it
+                    urllib.request.urlopen(req, timeout=0.2)
+                except Exception:
+                    # Expected timeout because we return 200 early in the background or just drop it
+                    pass
+
+            # Respond to Slack immediately (within <1 second)!
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok"}).encode())
+            return
+
+        # ==========================================
+        # BACKGROUND EXECUTION (X-Background: true)
+        # ==========================================
         event = data.get("event", {})
         event_type = event.get("type")
         user = event.get("user")
@@ -111,16 +153,7 @@ class handler(BaseHTTPRequestHandler):
         text = event.get("text", "")
         ts = event.get("ts")
         thread_ts = event.get("thread_ts")
-        subtype = event.get("subtype")
-
-        # Ignore bot's own messages or sub-events
-        if not event or user == BOT_USER_ID or event.get("bot_id") or subtype == "bot_message":
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "ignored"}).encode())
-            return
-
+        
         # Deduplicate to prevent double-posting
         if ts and ts in PROCESSED_TS:
             self.send_response(200)
@@ -136,8 +169,7 @@ class handler(BaseHTTPRequestHandler):
         is_mention = event_type == "app_mention" or f"<@{BOT_USER_ID}>" in text
 
         if is_dm or is_mention:
-            print(f"[REPLYING] Channel: {channel} | User: {user} | Text: {text}", flush=True)
-            # Ultra-fast 1.5s AI reply using gemini-3.5-flash-lite
+            print(f"[BACKGROUND] Channel: {channel} | User: {user} | Text: {text}", flush=True)
             reply = generate_ai_reply(text)
             reply_thread = thread_ts if not is_dm else None
             post_slack_message(channel, reply, thread_ts=reply_thread)
@@ -146,3 +178,4 @@ class handler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'application/json')
         self.end_headers()
         self.wfile.write(json.dumps({"status": "ok"}).encode())
+
