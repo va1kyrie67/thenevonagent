@@ -81,11 +81,26 @@ class handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
-        self.wfile.write('The Nevon Agent is live 24/7 on Vercel Serverless!'.encode())
+        try:
+            with open('/tmp/logs.txt', 'r') as f:
+                logs = f.read()
+        except Exception:
+            logs = "No logs yet."
+        
+        self.wfile.write(f'The Nevon Agent is live 24/7 on Vercel!\n\nLogs:\n{logs}'.encode())
+
+    def log_request(self, msg):
+        try:
+            with open('/tmp/logs.txt', 'a') as f:
+                f.write(msg + "\n")
+        except Exception:
+            pass
 
     def do_POST(self):
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length).decode('utf-8')
+        
+        self.log_request(f"POST received: {body[:200]}...")
         
         try:
             data = json.loads(body)
