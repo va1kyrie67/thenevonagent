@@ -37,6 +37,14 @@ def generate_ai_reply(user_text):
     full_prompt = f"{SYSTEM_PROMPT}\n\nUser Question:\n{clean_text}"
 
     errors = []
+    
+    # DEBUG: Get all models
+    try:
+        models = [m.name for m in ai_client.models.list()]
+        errors.append(f"Available: {models}")
+    except Exception as e:
+        errors.append(f"List error: {e}")
+
     for model_name in MODEL_LIST:
         try:
             response = ai_client.models.generate_content(
