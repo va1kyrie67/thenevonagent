@@ -3,7 +3,7 @@ import os
 import re
 import urllib.request
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler
 from google import genai
 
@@ -51,30 +51,55 @@ Rules:
 - Output ONLY the formatted post blocks with NO intro and NO outro.
 
 SPECIAL INSTRUCTION 2 - DAILY WORK REPORT FORMATTING:
-When the user asks to generate/post a daily report or status (e.g., starts with 'report' or 'status'):
-Generate a clean, structured Daily Work Report for Ali Aun following this exact format:
+When generating a daily work report for Ali Aun:
+- Header:
+Daily Work Report
+Date: Month Day, Year
 
-Daily Work Report - Ali Aun
-Date: [Current Date, e.g. Month Day, Year]
+- STRICT PRIORITY ORDER (Substantial & high-value work FIRST, Social Media always LAST):
+1. Email Template Development / Client Deliverables (e.g. Onboarding templates, revisions, pixel-perfect alignment)
+2. AI & Automation (e.g. Agent training, Make.com automations, bot workflows)
+3. QA Planning & Testing (e.g. QA testing plan for GTL x The Nevon partnership, bug tracking, audits)
+4. Development & Fixes
+5. Social Media (always at the very bottom, listing LinkedIn, Facebook, Instagram posts for Nadir Bhai, The Nevon, CrushSVG)
 
-[Category Name, e.g. Social Media / QA & Testing / Development / Email Templates]:
-- [Professionalized description of achievement/task]
-- [Professionalized description of achievement/task]
-
-Rules:
-- Organize the user's rough bullet points into logical categories (Social Media, QA & Testing, Development, Design, etc.).
-- Write clearly and professionally.
-- Output ONLY the formatted report with NO intro/outro so it can be posted directly to Slack.
+- Formatting Rules:
+Use plain text categories with standard bullet points (-).
+Write concise, professional, action-oriented bullet points (e.g., 'Reviewed client feedback...', 'Created and published...', 'Refined templates for pixel-perfect delivery...').
+Output ONLY the formatted report with NO intro/outro so it is ready for Slack.
 """
 
 PROCESSED_TS = set()
 
 def clean_slack_text(raw_text):
-    # Remove bot mention
     text = re.sub(r'<@[A-Z0-9]+>', '', raw_text).strip()
-    # Convert Slack formatted links <https://url|label> or <https://url> to raw url
     text = re.sub(r'<((?:https?://)[^|>]+)(?:\|[^>]+)?>', r'\1', text)
     return text.strip()
+
+def parse_time_to_epoch(text):
+    pkt = timezone(timedelta(hours=5))
+    now = datetime.now(pkt)
+    
+    m = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?', text.lower())
+    if not m:
+        return None
+    
+    hour = int(m.group(1))
+    minute = int(m.group(2)) if m.group(2) else 0
+    ampm = m.group(3)
+    
+    if ampm == 'pm' and hour < 12:
+        hour += 12
+    elif ampm == 'am' and hour == 12:
+        hour = 0
+    elif not ampm and hour <= 7: # e.g. "6" or "7" assumed PM for evening shift
+        hour += 12
+        
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target.timestamp() <= (now.timestamp() + 30):
+        target += timedelta(days=1)
+        
+    return int(target.timestamp()), target.strftime("%I:%M %p")
 
 def get_slack_history(channel_id, thread_ts=None):
     try:
@@ -100,6 +125,18 @@ def get_slack_history(channel_id, thread_ts=None):
                 return "\n".join(transcript)
     except Exception as e:
         print("History error:", e)
+    return ""
+
+def extract_last_report_from_history(history_text):
+    if not history_text:
+        return ""
+    # Find block starting with Daily Work Report
+    if "Daily Work Report" in history_text:
+        parts = history_text.split("Daily Work Report")
+        last_part = parts[-1]
+        # remove review footer if present
+        cleaned = "Daily Work Report" + last_part.split("---------------------------------")[0].split("Aapka Daily Work Report")[0].strip()
+        return cleaned
     return ""
 
 def generate_ai_reply(user_text, history_context=""):
@@ -136,17 +173,13 @@ def generate_ai_reply(user_text, history_context=""):
 
 def post_slack_message(channel, text, thread_ts=None):
     if not BOT_TOKEN:
-        print("ERROR: BOT_TOKEN is missing", flush=True)
         return False
     url = "https://slack.com/api/chat.postMessage"
     headers = {
         "Authorization": f"Bearer {BOT_TOKEN}",
         "Content-Type": "application/json; charset=utf-8"
     }
-    payload = {
-        "channel": channel,
-        "text": text
-    }
+    payload = {"channel": channel, "text": text}
     if thread_ts:
         payload["thread_ts"] = thread_ts
     
@@ -154,10 +187,31 @@ def post_slack_message(channel, text, thread_ts=None):
     try:
         with urllib.request.urlopen(req) as res:
             res_data = json.loads(res.read().decode("utf-8"))
-            print("Slack postMessage success:", res_data.get("ok"), flush=True)
             return res_data.get("ok", False)
     except Exception as e:
         print(f"Error posting to Slack: {e}", flush=True)
+        return False
+
+def schedule_slack_message(channel, text, post_at_epoch):
+    if not BOT_TOKEN:
+        return False
+    url = "https://slack.com/api/chat.scheduleMessage"
+    headers = {
+        "Authorization": f"Bearer {BOT_TOKEN}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    payload = {
+        "channel": channel,
+        "text": text,
+        "post_at": post_at_epoch
+    }
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
+    try:
+        with urllib.request.urlopen(req) as res:
+            res_data = json.loads(res.read().decode("utf-8"))
+            return res_data.get("ok", False)
+    except Exception as e:
+        print(f"Error scheduling in Slack: {e}", flush=True)
         return False
 
 class handler(BaseHTTPRequestHandler):
@@ -213,7 +267,6 @@ class handler(BaseHTTPRequestHandler):
         thread_ts = event.get("thread_ts")
         subtype = event.get("subtype")
         
-        # Ignore bot's own messages or sub-events
         if not event or user == BOT_USER_ID or event.get("bot_id") or subtype == "bot_message":
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -221,7 +274,6 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"status": "ignored"}).encode())
             return
             
-        # Deduplicate to prevent double-posting
         if ts and ts in PROCESSED_TS:
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -231,7 +283,6 @@ class handler(BaseHTTPRequestHandler):
         if ts:
             PROCESSED_TS.add(ts)
 
-        # Check if direct message (D...) or mention
         is_dm = channel.startswith("D") or event.get("channel_type") == "im"
         is_mention = event_type == "app_mention" or f"<@{BOT_USER_ID}>" in text
 
@@ -239,43 +290,73 @@ class handler(BaseHTTPRequestHandler):
         if is_dm or is_mention:
             try:
                 history = get_slack_history(channel, thread_ts)
-                reply = generate_ai_reply(text, history)
-                debug_info["reply"] = reply
-                
                 cleaned_user_text = clean_slack_text(text).lower()
-                has_links = bool(re.search(r'https?://[^\s]+', clean_slack_text(text)))
-                
-                # Check if this is an authorized admin (Ali Aun)
                 is_admin = (user == ADMIN_USER_ID)
                 
+                # Check for explicit schedule request on previous report
+                # e.g. "schedule for 6pm", "schedule 6pm", "schedule 6:30 pm"
+                if is_dm and is_admin and cleaned_user_text.startswith("schedule"):
+                    parsed_time = parse_time_to_epoch(cleaned_user_text)
+                    last_report = extract_last_report_from_history(history)
+                    
+                    if parsed_time and last_report:
+                        epoch, formatted_time = parsed_time
+                        ok = schedule_slack_message(DAILY_STATUS_CHANNEL_ID, last_report, epoch)
+                        if ok:
+                            dm_reply = f"Aapka Daily Work Report aaj {formatted_time} baje ke liye schedule ho gaya hai! ?\nSlack theek us waqt #daily-status channel mein bhej dega."
+                        else:
+                            dm_reply = "Scheduling mein thora masla aya, please dobara time specify karein."
+                    elif not last_report:
+                        dm_reply = "Pehle mujhe eport: likh kar aaj ke points dein taake main draft bana saku, phir schedule karein!"
+                    else:
+                        dm_reply = "Time samajh nahi aya. Please aese likhein: schedule for 6pm ya schedule 6:30pm"
+                    
+                    post_slack_message(channel, dm_reply)
+
+                # Check for "post now" on previous report
+                elif is_dm and is_admin and cleaned_user_text in ["post now", "post report", "approve", "bhej do", "send now"]:
+                    last_report = extract_last_report_from_history(history)
+                    if last_report:
+                        posted_ok = post_slack_message(DAILY_STATUS_CHANNEL_ID, last_report)
+                        dm_reply = "Maine aapka Daily Work Report #daily-status channel mein post kar diya hai! ??" if posted_ok else "Post karne mein error aya."
+                    else:
+                        dm_reply = "Pehle eport: likh kar apne points bhein!"
+                    post_slack_message(channel, dm_reply)
+
                 # Social Post Command
-                is_post_command = cleaned_user_text.startswith("post") or any(w in cleaned_user_text for w in ["post", "social", "bhej", "send", "share"])
-                
-                # Daily Status / Report Command
-                is_report_command = cleaned_user_text.startswith("report") or cleaned_user_text.startswith("status") or "daily report" in cleaned_user_text or "daily status" in cleaned_user_text
-                
-                # 1. Social Broadcasting (Admin Only)
-                if has_links and is_post_command and channel != SOCIAL_CHANNEL_ID:
+                elif "http" in text and (cleaned_user_text.startswith("post") or any(w in cleaned_user_text for w in ["social", "bhej", "send", "share"])):
+                    reply = generate_ai_reply(text, history)
                     if is_admin:
-                        posted_ok = post_slack_message(SOCIAL_CHANNEL_ID, reply)
-                        dm_reply = f"Maine ye post #social channel mein bhej di hai! ?\n\nPreview:\n{reply}" if posted_ok else f"Formatted text:\n\n{reply}"
+                        # Check if a schedule time was specified e.g. "post at 3pm https://..."
+                        if " at " in cleaned_user_text or " for " in cleaned_user_text or "schedule" in cleaned_user_text:
+                            parsed_time = parse_time_to_epoch(cleaned_user_text)
+                            if parsed_time:
+                                epoch, formatted_time = parsed_time
+                                ok = schedule_slack_message(SOCIAL_CHANNEL_ID, reply, epoch)
+                                dm_reply = f"Social post aaj {formatted_time} baje ke liye schedule ho gayi hai! ?\n\nPreview:\n{reply}" if ok else f"Formatted text:\n\n{reply}"
+                            else:
+                                posted_ok = post_slack_message(SOCIAL_CHANNEL_ID, reply)
+                                dm_reply = f"Maine ye post #social channel mein bhej di hai! ?\n\nPreview:\n{reply}" if posted_ok else f"Formatted text:\n\n{reply}"
+                        else:
+                            posted_ok = post_slack_message(SOCIAL_CHANNEL_ID, reply)
+                            dm_reply = f"Maine ye post #social channel mein bhej di hai! ?\n\nPreview:\n{reply}" if posted_ok else f"Formatted text:\n\n{reply}"
                     else:
                         dm_reply = f"Aap ke paas #social channel mein broadcast karne ki permission nahi hai. Sirf Ali Aun ye kar sakte hain.\n\nPreview:\n{reply}"
                     
                     post_slack_message(channel, dm_reply, thread_ts=thread_ts if not is_dm else None)
-                
-                # 2. Daily Status Report Broadcasting (Admin Only)
-                elif is_report_command and channel != DAILY_STATUS_CHANNEL_ID:
+
+                # Daily Status Generation & Review Request
+                elif cleaned_user_text.startswith("report") or cleaned_user_text.startswith("status") or "daily report" in cleaned_user_text:
+                    reply = generate_ai_reply(text, history)
                     if is_admin:
-                        posted_ok = post_slack_message(DAILY_STATUS_CHANNEL_ID, reply)
-                        dm_reply = f"Maine aapka Daily Work Report #daily-status channel mein post kar diya hai! ??\n\nPreview:\n{reply}" if posted_ok else f"Report generated:\n\n{reply}"
+                        review_prompt = f"Aapka Daily Work Report tayyar hai! ?? Review kar lein:\n\n{reply}\n\n---------------------------------\nAgar theek hai to reply karein:\n• post now (ab post karne ke liye)\n• schedule for 6pm (ya koi bhi time jaise schedule 6:30pm)"
+                        post_slack_message(channel, review_prompt, thread_ts=thread_ts if not is_dm else None)
                     else:
-                        dm_reply = reply
-                    
-                    post_slack_message(channel, dm_reply, thread_ts=thread_ts if not is_dm else None)
-                
+                        post_slack_message(channel, reply, thread_ts=thread_ts if not is_dm else None)
+
                 else:
-                    # Normal reply in current conversation
+                    # General Conversational Chat
+                    reply = generate_ai_reply(text, history)
                     reply_thread = thread_ts if not is_dm else None
                     post_slack_message(channel, reply, thread_ts=reply_thread)
                     
