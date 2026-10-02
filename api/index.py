@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import urllib.request
 import urllib.parse
 from http.server import BaseHTTPRequestHandler
@@ -8,13 +9,14 @@ from google import genai
 BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 BOT_USER_ID = os.environ.get("SLACK_BOT_USER_ID", "U0C48KSS0G3")
+SOCIAL_CHANNEL_ID = os.environ.get("SLACK_SOCIAL_CHANNEL_ID", "C0B107Q0553")
 
 ai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 # Ultra-fast models available in 2026
 MODEL_LIST = ["gemini-2.5-flash-lite", "gemini-3.5-flash-lite", "gemini-flash-lite-latest"]
 
-SYSTEM_PROMPT = """You are a highly capable AI assistant.
+SYSTEM_PROMPT = """You are a highly capable AI assistant and Social Media Coordinator for The Nevon & CrushSVG.
 
 Key Guidelines:
 1. Language Matching: If the user speaks in English, reply in professional English. If the user speaks in Roman Urdu, reply naturally in Roman Urdu.
@@ -23,29 +25,25 @@ Key Guidelines:
 4. Provide accurate, clear, and direct answers. Keep the tone helpful, confident, and professional.
 
 SPECIAL INSTRUCTION - SOCIAL MEDIA POST FORMATTING:
-If the user asks you to format or schedule social media links, analyze the raw links provided and generate the exact formatted message for their Slack #social channel according to these strict rules:
+If the user provides social media links or asks you to format/post to the #social channel, format each link using these exact templates:
 
-For company pages (The Nevon or CrushSVG):
-Format:
+1. For Company Pages (The Nevon or CrushSVG):
 Hey @channel ! must like the new post on [Company Name] [Platform] Page, and today we will be giving red tickets and penalty to anyone who have not been interacting with our recent post and they would have to work overtime.
 [Link]
-(Note: Platform should be Linkedin, Facebook, or Insta)
+(Note: [Platform] must be Linkedin, Facebook, or Insta. [Company Name] is either 'The Nevon' or 'CrushSVG')
 
-For Nadir Bhai's LinkedIn posts:
-Format:
+2. For Nadir Bhai's LinkedIn posts:
 Hey @channel ! must like and comment on this the post on Nadir bhai Linkedin Account.
 [Link]
 
-For Ali Aun's LinkedIn posts:
-Format:
+3. For Ali Aun's LinkedIn posts / personal posts:
 Hey @channel ! must like and comment on this post.
 [Link]
 
 Rules:
-- Automatically deduce the [Company Name] and [Platform], or whose account it is based on the URL or the context given by the user.
-- Do NOT use markdown links, just output the raw URL on the next line.
-- Do NOT include markdown bold or italics.
-- Separate multiple posts with a blank line.
+- If the user provides multiple links in one message, generate the formatted blocks for ALL links in order, separated by a blank line.
+- Do NOT use markdown links (no [text](url)), just output the raw URL directly on the line below the message.
+- Output ONLY the formatted post blocks if the user asked to post or format links, so it is ready to be sent directly to Slack.
 """
 
 PROCESSED_TS = set()
@@ -82,7 +80,7 @@ def generate_ai_reply(user_text, history_context=""):
         clean_text = "hello"
     
     if not ai_client:
-        return f"🤖 *The Nevon Agent:* (GEMINI_API_KEY not configured)."
+        return f"The Nevon Agent: (GEMINI_API_KEY not configured)."
 
     prompt_parts = [SYSTEM_PROMPT]
     if history_context:
@@ -105,12 +103,12 @@ def generate_ai_reply(user_text, history_context=""):
             errors.append(f"{model_name}: {str(e)}")
             continue
 
-    return f"🤖 *The Nevon Agent:* System is currently overloaded. Please try again in a few seconds! (Errors: {errors})"
+    return f"The Nevon Agent: System is currently overloaded. Please try again in a few seconds! (Errors: {errors})"
 
 def post_slack_message(channel, text, thread_ts=None):
     if not BOT_TOKEN:
         print("ERROR: BOT_TOKEN is missing", flush=True)
-        return
+        return False
     url = "https://slack.com/api/chat.postMessage"
     headers = {
         "Authorization": f"Bearer {BOT_TOKEN}",
@@ -128,8 +126,10 @@ def post_slack_message(channel, text, thread_ts=None):
         with urllib.request.urlopen(req) as res:
             res_data = json.loads(res.read().decode("utf-8"))
             print("Slack postMessage success:", res_data.get("ok"), flush=True)
+            return res_data.get("ok", False)
     except Exception as e:
         print(f"Error posting to Slack: {e}", flush=True)
+        return False
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -212,31 +212,32 @@ class handler(BaseHTTPRequestHandler):
                 history = get_slack_history(channel, thread_ts)
                 reply = generate_ai_reply(text, history)
                 debug_info["reply"] = reply
-                reply_thread = thread_ts if not is_dm else None
                 
-                # Inline post_slack_message to capture its response
-                url = "https://slack.com/api/chat.postMessage"
-                headers = {
-                    "Authorization": f"Bearer {BOT_TOKEN}",
-                    "Content-Type": "application/json; charset=utf-8"
-                }
-                payload = {"channel": channel, "text": reply}
-                if reply_thread:
-                    payload["thread_ts"] = reply_thread
+                # Check if user is asking to send/post to #social channel
+                has_links = bool(re.search(r'https?://[^\s]+', text))
+                is_social_intent = any(w in text.lower() for w in ["social", "post", "bhej", "send", "share", "channel"])
                 
-                req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
-                try:
-                    with urllib.request.urlopen(req) as res:
-                        res_data = json.loads(res.read().decode("utf-8"))
-                        debug_info["slack_api"] = res_data
-                except Exception as ex:
-                    debug_info["slack_error"] = str(ex)
+                # If message contains social links and user wants it posted to #social
+                if has_links and is_social_intent and channel != SOCIAL_CHANNEL_ID:
+                    # Post formatted content directly to #social channel
+                    posted_ok = post_slack_message(SOCIAL_CHANNEL_ID, reply)
+                    if posted_ok:
+                        dm_reply = f"Maine ye post #social channel mein bhej di hai!\n\nPreview:\n{reply}"
+                    else:
+                        dm_reply = f"Formatted text:\n\n{reply}"
+                    
+                    # Reply back in DM
+                    post_slack_message(channel, dm_reply, thread_ts=thread_ts if not is_dm else None)
+                else:
+                    # Normal reply in current conversation
+                    reply_thread = thread_ts if not is_dm else None
+                    post_slack_message(channel, reply, thread_ts=reply_thread)
                     
             except Exception as e:
                 debug_info["error"] = str(e)
+                print("Handler error:", e, flush=True)
 
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.end_headers()
         self.wfile.write(json.dumps({"status": "ok", "debug": debug_info}).encode())
-
