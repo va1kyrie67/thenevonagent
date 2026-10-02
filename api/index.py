@@ -92,7 +92,7 @@ def parse_time_to_epoch(text):
         hour += 12
     elif ampm == 'am' and hour == 12:
         hour = 0
-    elif not ampm and hour <= 7: # e.g. "6" or "7" assumed PM for evening shift
+    elif not ampm and hour <= 7:
         hour += 12
         
     target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -130,14 +130,64 @@ def get_slack_history(channel_id, thread_ts=None):
 def extract_last_report_from_history(history_text):
     if not history_text:
         return ""
-    # Find block starting with Daily Work Report
     if "Daily Work Report" in history_text:
         parts = history_text.split("Daily Work Report")
         last_part = parts[-1]
-        # remove review footer if present
         cleaned = "Daily Work Report" + last_part.split("---------------------------------")[0].split("Aapka Daily Work Report")[0].strip()
         return cleaned
     return ""
+
+def get_last_bot_message_in_channel(channel_id):
+    url = f"https://slack.com/api/conversations.history?channel={channel_id}&limit=15"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {BOT_TOKEN}"})
+    try:
+        with urllib.request.urlopen(req) as res:
+            data = json.loads(res.read().decode("utf-8"))
+            if data.get("ok"):
+                for m in data.get("messages", []):
+                    if m.get("bot_id") or m.get("user") == BOT_USER_ID:
+                        return m.get("ts"), m.get("text", "")[:60]
+    except Exception as e:
+        print("get_last_bot_message error:", e)
+    return None, None
+
+def delete_slack_message(channel, ts):
+    if not BOT_TOKEN or not ts:
+        return False
+    url = "https://slack.com/api/chat.delete"
+    headers = {
+        "Authorization": f"Bearer {BOT_TOKEN}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    payload = {"channel": channel, "ts": ts}
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
+    try:
+        with urllib.request.urlopen(req) as res:
+            res_data = json.loads(res.read().decode("utf-8"))
+            return res_data.get("ok", False)
+    except Exception as e:
+        print(f"Error deleting message: {e}", flush=True)
+        return False
+
+def cancel_scheduled_messages(channel_id):
+    url = f"https://slack.com/api/chat.scheduledMessages.list?channel={channel_id}"
+    headers = {"Authorization": f"Bearer {BOT_TOKEN}"}
+    req = urllib.request.Request(url, headers=headers)
+    count = 0
+    try:
+        with urllib.request.urlopen(req) as res:
+            data = json.loads(res.read().decode("utf-8"))
+            for sm in data.get("scheduled_messages", []):
+                del_url = "https://slack.com/api/chat.deleteScheduledMessage"
+                del_payload = json.dumps({"channel": channel_id, "scheduled_message_id": sm["id"]}).encode("utf-8")
+                del_req = urllib.request.Request(del_url, data=del_payload, headers={**headers, "Content-Type": "application/json"})
+                with urllib.request.urlopen(del_req) as del_res:
+                    res_data = json.loads(del_res.read().decode("utf-8"))
+                    if res_data.get("ok"):
+                        count += 1
+    except Exception as e:
+        print("Cancel scheduled error:", e)
+    return count
 
 def generate_ai_reply(user_text, history_context=""):
     clean_text = clean_slack_text(user_text)
@@ -156,7 +206,6 @@ def generate_ai_reply(user_text, history_context=""):
     full_prompt = "\n\n".join(prompt_parts)
 
     errors = []
-    
     for model_name in MODEL_LIST:
         try:
             response = ai_client.models.generate_content(
@@ -248,7 +297,6 @@ class handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        # 1. Slack URL Verification Challenge
         if data.get("type") == "url_verification":
             challenge = data.get("challenge")
             self.send_response(200)
@@ -257,7 +305,6 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"challenge": challenge}).encode())
             return
 
-        # 2. Extract Event Data
         event = data.get("event", {})
         event_type = event.get("type")
         user = str(event.get("user", ""))
@@ -293,9 +340,47 @@ class handler(BaseHTTPRequestHandler):
                 cleaned_user_text = clean_slack_text(text).lower()
                 is_admin = (user == ADMIN_USER_ID)
                 
-                # Check for explicit schedule request on previous report
-                # e.g. "schedule for 6pm", "schedule 6pm", "schedule 6:30 pm"
-                if is_dm and is_admin and cleaned_user_text.startswith("schedule"):
+                # ==========================================
+                # 1. DELETE / UNDO COMMANDS (Admin Only)
+                # ==========================================
+                if is_admin and (cleaned_user_text.startswith("delete") or cleaned_user_text.startswith("undo") or cleaned_user_text.startswith("remove")):
+                    # Delete Status / Report
+                    if any(w in cleaned_user_text for w in ["status", "report", "daily"]):
+                        msg_ts, msg_preview = get_last_bot_message_in_channel(DAILY_STATUS_CHANNEL_ID)
+                        if msg_ts:
+                            deleted = delete_slack_message(DAILY_STATUS_CHANNEL_ID, msg_ts)
+                            dm_reply = f"Maine #daily-status channel se aapki aakhri report delete kar di hai! ???\n(Text: {msg_preview})" if deleted else "Report delete karne mein masla aya."
+                        else:
+                            dm_reply = "Channel #daily-status mein bot ka koi haal hi mein bheja hua message nahi mila."
+                    
+                    # Cancel Scheduled Posts
+                    elif "schedule" in cleaned_user_text:
+                        cancelled_status = cancel_scheduled_messages(DAILY_STATUS_CHANNEL_ID)
+                        cancelled_social = cancel_scheduled_messages(SOCIAL_CHANNEL_ID)
+                        total = cancelled_status + cancelled_social
+                        dm_reply = f"Aapke {total} scheduled message(s) cancel kar diye gaye hain! ??" if total > 0 else "Koi pending scheduled message nahi mila."
+                    
+                    # Delete Social Post or Last Post (Default)
+                    else:
+                        msg_ts, msg_preview = get_last_bot_message_in_channel(SOCIAL_CHANNEL_ID)
+                        if msg_ts:
+                            deleted = delete_slack_message(SOCIAL_CHANNEL_ID, msg_ts)
+                            dm_reply = f"Maine #social channel se aakhri post delete kar di hai! ???\n(Text: {msg_preview})" if deleted else "Message delete karne mein masla aya."
+                        else:
+                            # fallback: check current channel
+                            cur_ts, cur_preview = get_last_bot_message_in_channel(channel)
+                            if cur_ts:
+                                deleted = delete_slack_message(channel, cur_ts)
+                                dm_reply = "Maine is chat se aakhri message delete kar diya hai! ???" if deleted else "Delete nahi ho saka."
+                            else:
+                                dm_reply = "Koi haal hi ka bot message nahi mila jisko delete kiya ja sake."
+                    
+                    post_slack_message(channel, dm_reply, thread_ts=thread_ts if not is_dm else None)
+
+                # ==========================================
+                # 2. SCHEDULE COMMAND (On Reviewed Report)
+                # ==========================================
+                elif is_dm and is_admin and cleaned_user_text.startswith("schedule"):
                     parsed_time = parse_time_to_epoch(cleaned_user_text)
                     last_report = extract_last_report_from_history(history)
                     
@@ -307,13 +392,15 @@ class handler(BaseHTTPRequestHandler):
                         else:
                             dm_reply = "Scheduling mein thora masla aya, please dobara time specify karein."
                     elif not last_report:
-                        dm_reply = "Pehle mujhe eport: likh kar aaj ke points dein taake main draft bana saku, phir schedule karein!"
+                        dm_reply = "Pehle mujhe eport: likh kar points dein taake main draft bana saku, phir schedule karein!"
                     else:
                         dm_reply = "Time samajh nahi aya. Please aese likhein: schedule for 6pm ya schedule 6:30pm"
                     
                     post_slack_message(channel, dm_reply)
 
-                # Check for "post now" on previous report
+                # ==========================================
+                # 3. POST NOW COMMAND (On Reviewed Report)
+                # ==========================================
                 elif is_dm and is_admin and cleaned_user_text in ["post now", "post report", "approve", "bhej do", "send now"]:
                     last_report = extract_last_report_from_history(history)
                     if last_report:
@@ -323,11 +410,12 @@ class handler(BaseHTTPRequestHandler):
                         dm_reply = "Pehle eport: likh kar apne points bhein!"
                     post_slack_message(channel, dm_reply)
 
-                # Social Post Command
+                # ==========================================
+                # 4. SOCIAL BROADCASTING COMMAND
+                # ==========================================
                 elif "http" in text and (cleaned_user_text.startswith("post") or any(w in cleaned_user_text for w in ["social", "bhej", "send", "share"])):
                     reply = generate_ai_reply(text, history)
                     if is_admin:
-                        # Check if a schedule time was specified e.g. "post at 3pm https://..."
                         if " at " in cleaned_user_text or " for " in cleaned_user_text or "schedule" in cleaned_user_text:
                             parsed_time = parse_time_to_epoch(cleaned_user_text)
                             if parsed_time:
@@ -345,17 +433,21 @@ class handler(BaseHTTPRequestHandler):
                     
                     post_slack_message(channel, dm_reply, thread_ts=thread_ts if not is_dm else None)
 
-                # Daily Status Generation & Review Request
+                # ==========================================
+                # 5. DAILY STATUS GENERATION (REVIEW REQUEST)
+                # ==========================================
                 elif cleaned_user_text.startswith("report") or cleaned_user_text.startswith("status") or "daily report" in cleaned_user_text:
                     reply = generate_ai_reply(text, history)
                     if is_admin:
-                        review_prompt = f"Aapka Daily Work Report tayyar hai! ?? Review kar lein:\n\n{reply}\n\n---------------------------------\nAgar theek hai to reply karein:\n• post now (ab post karne ke liye)\n• schedule for 6pm (ya koi bhi time jaise schedule 6:30pm)"
+                        review_prompt = f"Aapka Daily Work Report tayyar hai! ?? Review kar lein:\n\n{reply}\n\n---------------------------------\nAgar theek hai to reply karein:\n• post now (ab post karne ke liye)\n• schedule for 6pm (ya koi bhi time jaise schedule 6:30pm)\n• delete report (agar delete karna ho)"
                         post_slack_message(channel, review_prompt, thread_ts=thread_ts if not is_dm else None)
                     else:
                         post_slack_message(channel, reply, thread_ts=thread_ts if not is_dm else None)
 
+                # ==========================================
+                # 6. GENERAL CONVERSATION
+                # ==========================================
                 else:
-                    # General Conversational Chat
                     reply = generate_ai_reply(text, history)
                     reply_thread = thread_ts if not is_dm else None
                     post_slack_message(channel, reply, thread_ts=reply_thread)
