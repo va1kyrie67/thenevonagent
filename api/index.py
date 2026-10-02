@@ -25,7 +25,10 @@ Key Guidelines:
 4. Provide accurate, clear, and direct answers. Keep the tone helpful, confident, and professional.
 
 SPECIAL INSTRUCTION - SOCIAL MEDIA POST FORMATTING:
-If the user provides social media links or asks you to format/post to the #social channel, format each link using these exact templates:
+When the user sends social media links or starts a message with 'post' / 'post:':
+Analyze the raw links provided and output ONLY the formatted message blocks ready for Slack with NO extra conversational text.
+
+Templates to follow strictly:
 
 1. For Company Pages (The Nevon or CrushSVG):
 Hey @channel ! must like the new post on [Company Name] [Platform] Page, and today we will be giving red tickets and penalty to anyone who have not been interacting with our recent post and they would have to work overtime.
@@ -42,11 +45,18 @@ Hey @channel ! must like and comment on this post.
 
 Rules:
 - If the user provides multiple links in one message, generate the formatted blocks for ALL links in order, separated by a blank line.
-- Do NOT use markdown links (no [text](url)), just output the raw URL directly on the line below the message.
-- Output ONLY the formatted post blocks if the user asked to post or format links, so it is ready to be sent directly to Slack.
+- Do NOT use markdown links (no [text](url)), just output the raw clean URL directly on the line below the message.
+- Output ONLY the formatted post blocks with NO intro and NO outro.
 """
 
 PROCESSED_TS = set()
+
+def clean_slack_text(raw_text):
+    # Remove bot mention
+    text = re.sub(r'<@[A-Z0-9]+>', '', raw_text).strip()
+    # Convert Slack formatted links <https://url|label> or <https://url> to raw url
+    text = re.sub(r'<((?:https?://)[^|>]+)(?:\|[^>]+)?>', r'\1', text)
+    return text.strip()
 
 def get_slack_history(channel_id, thread_ts=None):
     try:
@@ -66,7 +76,7 @@ def get_slack_history(channel_id, thread_ts=None):
                 transcript = []
                 for m in messages[-6:]:
                     speaker = "Agent" if m.get("bot_id") else "User"
-                    m_text = m.get("text", "").replace(f"<@{BOT_USER_ID}>", "").strip()
+                    m_text = clean_slack_text(m.get("text", ""))
                     if m_text:
                         transcript.append(f"{speaker}: {m_text}")
                 return "\n".join(transcript)
@@ -75,12 +85,12 @@ def get_slack_history(channel_id, thread_ts=None):
     return ""
 
 def generate_ai_reply(user_text, history_context=""):
-    clean_text = user_text.replace(f"<@{BOT_USER_ID}>", "").strip()
+    clean_text = clean_slack_text(user_text)
     if not clean_text:
         clean_text = "hello"
     
     if not ai_client:
-        return f"The Nevon Agent: (GEMINI_API_KEY not configured)."
+        return "The Nevon Agent: (GEMINI_API_KEY not configured)."
 
     prompt_parts = [SYSTEM_PROMPT]
     if history_context:
@@ -213,16 +223,18 @@ class handler(BaseHTTPRequestHandler):
                 reply = generate_ai_reply(text, history)
                 debug_info["reply"] = reply
                 
-                # Check if user is asking to send/post to #social channel
-                has_links = bool(re.search(r'https?://[^\s]+', text))
-                is_social_intent = any(w in text.lower() for w in ["social", "post", "bhej", "send", "share", "channel"])
+                cleaned_user_text = clean_slack_text(text).lower()
+                has_links = bool(re.search(r'https?://[^\s]+', clean_slack_text(text)))
                 
-                # If message contains social links and user wants it posted to #social
-                if has_links and is_social_intent and channel != SOCIAL_CHANNEL_ID:
+                # Check if user used "post" command or asked to post to social
+                is_post_command = cleaned_user_text.startswith("post") or any(w in cleaned_user_text for w in ["post", "social", "bhej", "send", "share"])
+                
+                # If message contains social links and user typed 'post' / social intent
+                if has_links and is_post_command and channel != SOCIAL_CHANNEL_ID:
                     # Post formatted content directly to #social channel
                     posted_ok = post_slack_message(SOCIAL_CHANNEL_ID, reply)
                     if posted_ok:
-                        dm_reply = f"Maine ye post #social channel mein bhej di hai!\n\nPreview:\n{reply}"
+                        dm_reply = f"Maine ye post #social channel mein bhej di hai! ?\n\nPreview:\n{reply}"
                     else:
                         dm_reply = f"Formatted text:\n\n{reply}"
                     
