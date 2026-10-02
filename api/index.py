@@ -392,7 +392,8 @@ class handler(BaseHTTPRequestHandler):
                         else:
                             dm_reply = "Scheduling mein thora masla aya, please dobara time specify karein."
                     elif not last_report:
-                        dm_reply = "Pehle mujhe eport: likh kar points dein taake main draft bana saku, phir schedule karein!"
+                        dm_reply = "Pehle mujhe 
+eport: likh kar points dein taake main draft bana saku, phir schedule karein!"
                     else:
                         dm_reply = "Time samajh nahi aya. Please aese likhein: schedule for 6pm ya schedule 6:30pm"
                     
@@ -407,7 +408,8 @@ class handler(BaseHTTPRequestHandler):
                         posted_ok = post_slack_message(DAILY_STATUS_CHANNEL_ID, last_report)
                         dm_reply = "Maine aapka Daily Work Report #daily-status channel mein post kar diya hai! ??" if posted_ok else "Post karne mein error aya."
                     else:
-                        dm_reply = "Pehle eport: likh kar apne points bhein!"
+                        dm_reply = "Pehle 
+eport: likh kar apne points bhein!"
                     post_slack_message(channel, dm_reply)
 
                 # ==========================================
@@ -439,7 +441,7 @@ class handler(BaseHTTPRequestHandler):
                 elif cleaned_user_text.startswith("report") or cleaned_user_text.startswith("status") or "daily report" in cleaned_user_text:
                     reply = generate_ai_reply(text, history)
                     if is_admin:
-                        review_prompt = f"Aapka Daily Work Report tayyar hai! ?? Review kar lein:\n\n{reply}\n\n---------------------------------\nAgar theek hai to reply karein:\n• post now (ab post karne ke liye)\n• schedule for 6pm (ya koi bhi time jaise schedule 6:30pm)\n• delete report (agar delete karna ho)"
+                        review_prompt = f"Aapka Daily Work Report tayyar hai! ?? Review kar lein:\n\n{reply}\n\n---------------------------------\nAgar theek hai to reply karein:\n- post now (ab post karne ke liye)\n- schedule for 6pm (ya koi bhi time jaise schedule 6:30pm)\n- delete report (agar delete karna ho)"
                         post_slack_message(channel, review_prompt, thread_ts=thread_ts if not is_dm else None)
                     else:
                         post_slack_message(channel, reply, thread_ts=thread_ts if not is_dm else None)
