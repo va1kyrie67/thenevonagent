@@ -3,20 +3,22 @@ import os
 import re
 import urllib.request
 import urllib.parse
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 from google import genai
 
 BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 BOT_USER_ID = os.environ.get("SLACK_BOT_USER_ID", "U0C48KSS0G3")
+ADMIN_USER_ID = os.environ.get("SLACK_ADMIN_USER_ID", "U0BDPLQ226R") # Ali Aun
 SOCIAL_CHANNEL_ID = os.environ.get("SLACK_SOCIAL_CHANNEL_ID", "C0B107Q0553")
+DAILY_STATUS_CHANNEL_ID = os.environ.get("SLACK_DAILY_STATUS_CHANNEL_ID", "C0B9FAWPF0F")
 
 ai_client = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
-# Ultra-fast models available in 2026
 MODEL_LIST = ["gemini-2.5-flash-lite", "gemini-3.5-flash-lite", "gemini-flash-lite-latest"]
 
-SYSTEM_PROMPT = """You are a highly capable AI assistant and Social Media Coordinator for The Nevon & CrushSVG.
+SYSTEM_PROMPT = """You are a highly capable AI assistant and Operations Coordinator for The Nevon & CrushSVG.
 
 Key Guidelines:
 1. Language Matching: If the user speaks in English, reply in professional English. If the user speaks in Roman Urdu, reply naturally in Roman Urdu.
@@ -24,9 +26,9 @@ Key Guidelines:
 3. No Introductions: Do not introduce yourself. Never say "I am Ali Ai" or "Main The Nevon Agent hoon". Just directly answer the user's question or respond to their greeting. Act like a normal, helpful, and direct bot.
 4. Provide accurate, clear, and direct answers. Keep the tone helpful, confident, and professional.
 
-SPECIAL INSTRUCTION - SOCIAL MEDIA POST FORMATTING:
-When the user sends social media links or starts a message with 'post' / 'post:':
-Analyze the raw links provided and output ONLY the formatted message blocks ready for Slack with NO extra conversational text.
+SPECIAL INSTRUCTION 1 - SOCIAL MEDIA POST FORMATTING:
+When the user sends social media links or starts with 'post':
+Analyze the raw links and output ONLY the formatted message blocks ready for Slack with NO extra conversational text.
 
 Templates to follow strictly:
 
@@ -44,9 +46,25 @@ Hey @channel ! must like and comment on this post.
 [Link]
 
 Rules:
-- If the user provides multiple links in one message, generate the formatted blocks for ALL links in order, separated by a blank line.
+- Generate formatted blocks for ALL links in order, separated by a blank line.
 - Do NOT use markdown links (no [text](url)), just output the raw clean URL directly on the line below the message.
 - Output ONLY the formatted post blocks with NO intro and NO outro.
+
+SPECIAL INSTRUCTION 2 - DAILY WORK REPORT FORMATTING:
+When the user asks to generate/post a daily report or status (e.g., starts with 'report' or 'status'):
+Generate a clean, structured Daily Work Report for Ali Aun following this exact format:
+
+Daily Work Report - Ali Aun
+Date: [Current Date, e.g. Month Day, Year]
+
+[Category Name, e.g. Social Media / QA & Testing / Development / Email Templates]:
+- [Professionalized description of achievement/task]
+- [Professionalized description of achievement/task]
+
+Rules:
+- Organize the user's rough bullet points into logical categories (Social Media, QA & Testing, Development, Design, etc.).
+- Write clearly and professionally.
+- Output ONLY the formatted report with NO intro/outro so it can be posted directly to Slack.
 """
 
 PROCESSED_TS = set()
@@ -92,7 +110,8 @@ def generate_ai_reply(user_text, history_context=""):
     if not ai_client:
         return "The Nevon Agent: (GEMINI_API_KEY not configured)."
 
-    prompt_parts = [SYSTEM_PROMPT]
+    today_str = datetime.now().strftime("%B %d, %Y")
+    prompt_parts = [SYSTEM_PROMPT, f"Today's Date: {today_str}"]
     if history_context:
         prompt_parts.append(f"--- Recent Conversation Context ---\n{history_context}\n-----------------------------------")
     
@@ -187,7 +206,7 @@ class handler(BaseHTTPRequestHandler):
         # 2. Extract Event Data
         event = data.get("event", {})
         event_type = event.get("type")
-        user = event.get("user")
+        user = str(event.get("user", ""))
         channel = str(event.get("channel", ""))
         text = event.get("text", "")
         ts = event.get("ts")
@@ -226,20 +245,35 @@ class handler(BaseHTTPRequestHandler):
                 cleaned_user_text = clean_slack_text(text).lower()
                 has_links = bool(re.search(r'https?://[^\s]+', clean_slack_text(text)))
                 
-                # Check if user used "post" command or asked to post to social
+                # Check if this is an authorized admin (Ali Aun)
+                is_admin = (user == ADMIN_USER_ID)
+                
+                # Social Post Command
                 is_post_command = cleaned_user_text.startswith("post") or any(w in cleaned_user_text for w in ["post", "social", "bhej", "send", "share"])
                 
-                # If message contains social links and user typed 'post' / social intent
+                # Daily Status / Report Command
+                is_report_command = cleaned_user_text.startswith("report") or cleaned_user_text.startswith("status") or "daily report" in cleaned_user_text or "daily status" in cleaned_user_text
+                
+                # 1. Social Broadcasting (Admin Only)
                 if has_links and is_post_command and channel != SOCIAL_CHANNEL_ID:
-                    # Post formatted content directly to #social channel
-                    posted_ok = post_slack_message(SOCIAL_CHANNEL_ID, reply)
-                    if posted_ok:
-                        dm_reply = f"Maine ye post #social channel mein bhej di hai! ?\n\nPreview:\n{reply}"
+                    if is_admin:
+                        posted_ok = post_slack_message(SOCIAL_CHANNEL_ID, reply)
+                        dm_reply = f"Maine ye post #social channel mein bhej di hai! ?\n\nPreview:\n{reply}" if posted_ok else f"Formatted text:\n\n{reply}"
                     else:
-                        dm_reply = f"Formatted text:\n\n{reply}"
+                        dm_reply = f"Aap ke paas #social channel mein broadcast karne ki permission nahi hai. Sirf Ali Aun ye kar sakte hain.\n\nPreview:\n{reply}"
                     
-                    # Reply back in DM
                     post_slack_message(channel, dm_reply, thread_ts=thread_ts if not is_dm else None)
+                
+                # 2. Daily Status Report Broadcasting (Admin Only)
+                elif is_report_command and channel != DAILY_STATUS_CHANNEL_ID:
+                    if is_admin:
+                        posted_ok = post_slack_message(DAILY_STATUS_CHANNEL_ID, reply)
+                        dm_reply = f"Maine aapka Daily Work Report #daily-status channel mein post kar diya hai! ??\n\nPreview:\n{reply}" if posted_ok else f"Report generated:\n\n{reply}"
+                    else:
+                        dm_reply = reply
+                    
+                    post_slack_message(channel, dm_reply, thread_ts=thread_ts if not is_dm else None)
+                
                 else:
                     # Normal reply in current conversation
                     reply_thread = thread_ts if not is_dm else None
