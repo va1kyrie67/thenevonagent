@@ -40,6 +40,7 @@ Hey @channel ! must like the new post on [Company Name] [Platform] Page, and tod
 2. For Nadir Bhai's LinkedIn posts:
 Hey @channel ! must like and comment on this the post on Nadir bhai Linkedin Account.
 [Link]
+(Note: Any post mentioned as Nadir Bhai, or shortlinks like lnkd.in posted in morning/evening, must strictly use Nadir Bhai's template)
 
 3. For Ali Aun's LinkedIn posts / personal posts:
 Hey @channel ! must like and comment on this post.
@@ -125,6 +126,17 @@ def get_slack_history(channel_id, thread_ts=None):
                 return "\n".join(transcript)
     except Exception as e:
         print("History error:", e)
+    return ""
+
+def extract_last_social_post(history_text):
+    if not history_text:
+        return ""
+    matches = re.findall(r'(Hey (?:@channel|<!channel>)[^
+]*
+[^
+]+)', history_text)
+    if matches:
+        return matches[-1].strip()
     return ""
 
 def extract_last_report_from_history(history_text):
@@ -415,7 +427,29 @@ eport: likh kar apne points bhein!"
                 # ==========================================
                 # 4. SOCIAL BROADCASTING COMMAND
                 # ==========================================
-                elif "http" in text and (cleaned_user_text.startswith("post") or any(w in cleaned_user_text for w in ["social", "bhej", "send", "share"])):
+                # Check if current message has links OR recent history has links
+                has_curr_links = bool(re.search(r'(?:https?://|lnkd\.in/|facebook\.com/|instagram\.com/)[^\s]+', clean_slack_text(text)))
+                has_hist_links = bool(re.search(r'(?:https?://|lnkd\.in/|facebook\.com/|instagram\.com/)[^\s]+', history))
+                has_social_intent = (
+                    cleaned_user_text.startswith("post") or 
+                    any(w in cleaned_user_text for w in ["social", "bhej", "send", "share", "channel"])
+                )
+
+                # 4. SOCIAL BROADCASTING COMMAND
+                elif is_admin and (has_curr_links or has_hist_links) and has_social_intent:
+                    # If current text doesn't contain the link, combine with history for AI
+                    ai_input = text
+                    if not has_curr_links and has_hist_links:
+                        ai_input = f"Format and post this to social based on recent context: {text}"
+                    
+                    reply = generate_ai_reply(ai_input, history)
+                    
+                    # Ensure reply contains formatted post
+                    if "Hey @channel" not in reply and "Hey <!channel>" not in reply:
+                        # Extract previous post from history if available
+                        prev_post = extract_last_social_post(history) if "extract_last_social_post" in globals() else None
+                        if prev_post:
+                            reply = prev_post
                     reply = generate_ai_reply(text, history)
                     if is_admin:
                         if " at " in cleaned_user_text or " for " in cleaned_user_text or "schedule" in cleaned_user_text:
