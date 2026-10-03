@@ -26,6 +26,7 @@ Key Guidelines:
 3. No Introductions: Do not introduce yourself. Never say "I am Ali Ai" or "Main The Nevon Agent hoon". Just directly answer the user's question or respond to their greeting. Act like a normal, helpful, and direct bot.
 4. Provide accurate, clear, and direct answers. Keep the tone helpful, confident, and professional.
 5. NEVER claim you sent, posted, scheduled, deleted, or followed up on anything. In this conversation you can only reply with text. If the user asks you to message someone or a channel and you are reading this, it means the request was not understood as a command. Reply briefly that you could not identify the channel, and ask them to write it like: crushsvg channel me ahtisham aur irtaza ko msg bhej ke tickets ka status kya hai.
+6. CONTEXTUAL REPLIES: If you are reading a conversation history where users are talking to each other and their message does NOT require your input, or they are not answering a question you asked, you MUST reply with EXACTLY the word: IGNORE_MESSAGE
 
 SPECIAL INSTRUCTION 1 - SOCIAL MEDIA POST FORMATTING:
 When the user sends social media links or starts with 'post':
@@ -207,7 +208,7 @@ TEAM_DIRECTORY = {
     "U0B11HVF5AA": ["sardar muhammad nadir", "nadir"],
     "U0B1GJBD9NV": ["fatima irfan", "fatima"],
     "U0B89NBCVQA": ["azan mehdi", "azan"],
-    "U0B967U99DW": ["muhammad umar", "umar"],
+    "U0B967U99DW": ["muhammad umar", "umar", "umer"],
     "U0B9E85N0UV": ["mishal"],
     "U0BDBJLULET": ["sultan ali", "sultan"],
     "U0BG93NG2UU": ["muhammad aswad khan", "aswad"],
@@ -467,10 +468,29 @@ class handler(BaseHTTPRequestHandler):
         is_dm = channel.startswith("D") or event.get("channel_type") == "im"
         is_mention = event_type == "app_mention" or f"<@{BOT_USER_ID}>" in text
 
+        is_potential_reply = False
+        if not is_dm and not is_mention and event_type == "message" and not event.get("bot_id") and subtype != "bot_message":
+            if channel not in (SOCIAL_CHANNEL_ID, DAILY_STATUS_CHANNEL_ID):
+                is_potential_reply = True
+
         debug_info = {}
-        if is_dm or is_mention:
+        if is_dm or is_mention or is_potential_reply:
             try:
                 history = get_slack_history(channel, thread_ts)
+                
+                if is_potential_reply:
+                    lines = [l for l in history.split('\n') if l.strip()]
+                    if any(l.startswith("Agent:") for l in lines[-3:]):
+                        is_mention = True
+                    elif thread_ts and lines and lines[0].startswith("Agent:"):
+                        is_mention = True
+                        
+                    if not is_mention:
+                        self.send_response(200)
+                        self.send_header('Content-type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"status": "ignored"}).encode())
+                        return
                 cleaned_user_text = clean_slack_text(text).lower()
                 is_admin = (user == ADMIN_USER_ID)
 
@@ -684,8 +704,9 @@ class handler(BaseHTTPRequestHandler):
                 # ==========================================
                 else:
                     reply = generate_ai_reply(text, history)
-                    reply_thread = thread_ts if not is_dm else None
-                    post_slack_message(channel, reply, thread_ts=reply_thread)
+                    if reply.strip() != "IGNORE_MESSAGE":
+                        reply_thread = thread_ts if not is_dm else None
+                        post_slack_message(channel, reply, thread_ts=reply_thread)
                     
             except Exception as e:
                 debug_info["error"] = str(e)
