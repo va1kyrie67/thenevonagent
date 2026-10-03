@@ -25,6 +25,7 @@ Key Guidelines:
 2. NO Markdown Formatting: Do NOT use asterisks (** or *), hashtags (#), or underscores (_). Slack does not render them well. Output plain text only. Use numbers for lists and line breaks for spacing.
 3. No Introductions: Do not introduce yourself. Never say "I am Ali Ai" or "Main The Nevon Agent hoon". Just directly answer the user's question or respond to their greeting. Act like a normal, helpful, and direct bot.
 4. Provide accurate, clear, and direct answers. Keep the tone helpful, confident, and professional.
+5. NEVER claim you sent, posted, scheduled, deleted, or followed up on anything. In this conversation you can only reply with text. If the user asks you to message someone or a channel and you are reading this, it means the request was not understood as a command. Reply briefly that you could not identify the channel, and ask them to write it like: crushsvg channel me ahtisham aur irtaza ko msg bhej ke tickets ka status kya hai.
 
 SPECIAL INSTRUCTION 1 - SOCIAL MEDIA POST FORMATTING:
 When the user sends social media links or starts with 'post':
@@ -131,10 +132,7 @@ def get_slack_history(channel_id, thread_ts=None):
 def extract_last_social_post(history_text):
     if not history_text:
         return ""
-    matches = re.findall(r'(Hey (?:@channel|<!channel>)[^
-]*
-[^
-]+)', history_text)
+    matches = re.findall(r'(Hey (?:@channel|<!channel>)[^\n]*\n[^\n]+)', history_text)
     if matches:
         return matches[-1].strip()
     return ""
@@ -200,6 +198,107 @@ def cancel_scheduled_messages(channel_id):
     except Exception as e:
         print("Cancel scheduled error:", e)
     return count
+
+# ==========================================
+# RELAY HELPERS (post a message into any channel on Ali's instruction)
+# ==========================================
+# Static directory (bot token lacks users:read scope). Keys are lowercase name fragments.
+TEAM_DIRECTORY = {
+    "U0B11HVF5AA": ["sardar muhammad nadir", "nadir"],
+    "U0B1GJBD9NV": ["fatima irfan", "fatima"],
+    "U0B89NBCVQA": ["azan mehdi", "azan"],
+    "U0B967U99DW": ["muhammad umar", "umar"],
+    "U0B9E85N0UV": ["mishal"],
+    "U0BDBJLULET": ["sultan ali", "sultan"],
+    "U0BG93NG2UU": ["muhammad aswad khan", "aswad"],
+    "U0C1FQCECLV": ["joun ahmed", "joun"],
+    "U0C205GFWQZ": ["muhammad arham athar", "arham athar", "arham"],
+    "U0C2W4D21PH": ["muhammad irtaza", "irtaza"],
+    "U0C43V57UDN": ["hafiz arslan", "arslan"],
+    "U0C4J8PEY1M": ["abdul moiz shahzad", "moiz shahzad"],
+    "U0C4JA7HPPW": ["abdul moiz", "moiz"],
+    "U0C5LQ5331U": ["khalid niaz", "khalid"],
+    "U0C5QKUBLU8": ["ahtisham ul haq", "ahtisham", "ehtisham"],
+}
+
+RELAY_VERBS = ["msg", "message", "bhej", "phenk", "phek", "follow up", "followup", "follow-up",
+               "pooch", "puch", "pucho", "poocho", "bol", "keh", "kah", "tell", "ask", "remind",
+               "yaad", "status le", "update le", "inform", "bata"]
+
+def get_bot_channels():
+    try:
+        url = "https://slack.com/api/conversations.list?types=public_channel,private_channel&limit=200&exclude_archived=true"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {BOT_TOKEN}"})
+        with urllib.request.urlopen(req, timeout=3) as res:
+            data = json.loads(res.read().decode("utf-8"))
+            if data.get("ok"):
+                return [(c["id"], c["name"]) for c in data.get("channels", []) if c.get("is_member")]
+    except Exception as e:
+        print("Channel list error:", e)
+    return []
+
+def find_channel_in_text(text, channels):
+    # Explicit Slack channel link: <#C123|name> or <#C123>
+    m = re.search(r'<#(C[A-Z0-9]+)(?:\|([^>]*))?>', text)
+    if m:
+        cid = m.group(1)
+        for c_id, c_name in channels:
+            if c_id == cid:
+                return c_id, c_name
+        return cid, m.group(2) or cid
+    lower = text.lower()
+    # Longest names first so 'thenevon-website' wins over 'thenevon'
+    for c_id, c_name in sorted(channels, key=lambda c: -len(c[1])):
+        variants = {c_name, c_name.replace("-", " "), c_name.replace("-", "")}
+        for v in variants:
+            if re.search(r'(?<![a-z0-9])#?' + re.escape(v) + r'(?![a-z0-9])', lower):
+                return c_id, c_name
+    return None, None
+
+def has_relay_intent(text_lower):
+    return any(re.search(r'(?<![a-z])' + re.escape(v), text_lower) for v in RELAY_VERBS)
+
+def find_mentioned_users(text_lower):
+    found = []
+    for uid, names in TEAM_DIRECTORY.items():
+        if any(re.search(r'(?<![a-z])' + re.escape(n) + r'(?![a-z])', text_lower) for n in names):
+            found.append(uid)
+    # 'abdul moiz' also matches 'abdul moiz shahzad' - drop the shorter one if longer matched
+    if "U0C4J8PEY1M" in found and "U0C4JA7HPPW" in found and "shahzad" in text_lower:
+        found.remove("U0C4JA7HPPW")
+    return found
+
+def compose_relay_message(instruction, mention_ids, channel_name, history_context=""):
+    mentions = " ".join(f"<@{u}>" for u in mention_ids)
+    prompt = f"""You write Slack messages on behalf of Ali Aun (Operations / QA lead at The Nevon & CrushSVG).
+Ali gave you an instruction (often in Roman Urdu) describing a message to post in the #{channel_name} channel.
+Write the ACTUAL message Ali wants posted, addressed directly to the people, in clear, polite, professional English.
+
+Rules:
+- Output ONLY the message text. No preface, no quotes, no explanation.
+- Start the message with exactly these mentions (if any): {mentions if mentions else '(no mentions)'}
+- No markdown (no asterisks, underscores, hashtags). Plain text only.
+- Keep it short and direct (1 to 3 sentences). Do not invent deadlines or facts not in the instruction.
+- Write as Ali speaking in first person is NOT required; write as a team coordinator message.
+
+Recent DM context (use it to understand follow-ups like 'send it there'):
+{history_context}
+
+Ali's instruction: {instruction}"""
+    if not ai_client:
+        return None
+    for model_name in MODEL_LIST:
+        try:
+            response = ai_client.models.generate_content(model=model_name, contents=prompt)
+            if response and response.text:
+                msg = response.text.strip().strip('"').replace("**", "")
+                if mentions and not all(f"<@{u}>" in msg for u in mention_ids):
+                    msg = mentions + " " + msg
+                return msg
+        except Exception as e:
+            print(f"Relay compose error {model_name}:", e)
+            continue
+    return None
 
 def generate_ai_reply(user_text, history_context=""):
     clean_text = clean_slack_text(user_text)
@@ -351,13 +450,51 @@ class handler(BaseHTTPRequestHandler):
                 history = get_slack_history(channel, thread_ts)
                 cleaned_user_text = clean_slack_text(text).lower()
                 is_admin = (user == ADMIN_USER_ID)
+
+                # ---- Pre-compute routing inputs ----
+                has_curr_links = bool(re.search(r'(?:https?://|lnkd\.in/|facebook\.com/|instagram\.com/)[^\s]+', clean_slack_text(text)))
+                has_hist_links = bool(re.search(r'(?:https?://|lnkd\.in/|facebook\.com/|instagram\.com/)[^\s]+', history))
+                has_social_intent = (
+                    cleaned_user_text.startswith("post") or
+                    any(w in cleaned_user_text for w in ["social", "bhej", "send", "share", "channel"])
+                )
+
+                relay_channel_id, relay_channel_name, relay_mentions, relay_instruction = None, None, [], ""
+                bot_channels = []
+                is_command_word = cleaned_user_text.startswith(("delete", "undo", "remove", "schedule", "report", "status", "post"))
+                if is_admin and is_dm and not has_curr_links and not is_command_word and has_relay_intent(cleaned_user_text):
+                    bot_channels = [c for c in get_bot_channels() if c[0] not in (SOCIAL_CHANNEL_ID, DAILY_STATUS_CHANNEL_ID)]
+                    relay_channel_id, relay_channel_name = find_channel_in_text(text, bot_channels)
+                    source_text = cleaned_user_text
+                    relay_instruction = clean_slack_text(text)
+                    if not relay_channel_id:
+                        # Follow-up like "msg phenk na wahan pr": look back at Ali's recent messages
+                        user_lines = [l[len("User: "):] for l in history.split("\n") if l.startswith("User: ")]
+                        for prev in reversed(user_lines[:-1] if user_lines and user_lines[-1].lower() == cleaned_user_text else user_lines):
+                            cid, cname = find_channel_in_text(prev, bot_channels)
+                            if cid:
+                                relay_channel_id, relay_channel_name = cid, cname
+                                source_text = prev.lower() + " " + cleaned_user_text
+                                relay_instruction = prev + "\n(Follow-up: " + clean_slack_text(text) + ")"
+                                break
+                    if relay_channel_id:
+                        tagged = [u for u in re.findall(r'<@([A-Z0-9]+)>', text) if u != BOT_USER_ID]
+                        relay_mentions = list(dict.fromkeys(tagged + find_mentioned_users(source_text)))
                 
                 # ==========================================
                 # 1. DELETE / UNDO COMMANDS (Admin Only)
                 # ==========================================
                 if is_admin and (cleaned_user_text.startswith("delete") or cleaned_user_text.startswith("undo") or cleaned_user_text.startswith("remove")):
+                    named_cid, named_cname = find_channel_in_text(text, [c for c in get_bot_channels() if c[0] not in (SOCIAL_CHANNEL_ID, DAILY_STATUS_CHANNEL_ID)])
+                    # Delete last bot message in a specifically named channel (e.g. "delete crushsvg")
+                    if named_cid and "post" not in cleaned_user_text:
+                        msg_ts, msg_preview = get_last_bot_message_in_channel(named_cid)
+                        if msg_ts and delete_slack_message(named_cid, msg_ts):
+                            dm_reply = f"#{named_cname} se bot ka aakhri message delete kar diya.\n(Text: {msg_preview})"
+                        else:
+                            dm_reply = f"#{named_cname} mein bot ka koi haal hi ka message nahi mila."
                     # Delete Status / Report
-                    if any(w in cleaned_user_text for w in ["status", "report", "daily"]):
+                    elif any(w in cleaned_user_text for w in ["status", "report", "daily"]):
                         msg_ts, msg_preview = get_last_bot_message_in_channel(DAILY_STATUS_CHANNEL_ID)
                         if msg_ts:
                             deleted = delete_slack_message(DAILY_STATUS_CHANNEL_ID, msg_ts)
@@ -404,8 +541,7 @@ class handler(BaseHTTPRequestHandler):
                         else:
                             dm_reply = "Scheduling mein thora masla aya, please dobara time specify karein."
                     elif not last_report:
-                        dm_reply = "Pehle mujhe 
-eport: likh kar points dein taake main draft bana saku, phir schedule karein!"
+                        dm_reply = "Pehle mujhe 'report:' likh kar points dein taake main draft bana saku, phir schedule karein!"
                     else:
                         dm_reply = "Time samajh nahi aya. Please aese likhein: schedule for 6pm ya schedule 6:30pm"
                     
@@ -420,22 +556,27 @@ eport: likh kar points dein taake main draft bana saku, phir schedule karein!"
                         posted_ok = post_slack_message(DAILY_STATUS_CHANNEL_ID, last_report)
                         dm_reply = "Maine aapka Daily Work Report #daily-status channel mein post kar diya hai! ??" if posted_ok else "Post karne mein error aya."
                     else:
-                        dm_reply = "Pehle 
-eport: likh kar apne points bhein!"
+                        dm_reply = "Pehle 'report:' likh kar apne points bhejein!"
                     post_slack_message(channel, dm_reply)
 
                 # ==========================================
-                # 4. SOCIAL BROADCASTING COMMAND
+                # 4. CHANNEL RELAY (Admin asks bot to message people in a channel)
                 # ==========================================
-                # Check if current message has links OR recent history has links
-                has_curr_links = bool(re.search(r'(?:https?://|lnkd\.in/|facebook\.com/|instagram\.com/)[^\s]+', clean_slack_text(text)))
-                has_hist_links = bool(re.search(r'(?:https?://|lnkd\.in/|facebook\.com/|instagram\.com/)[^\s]+', history))
-                has_social_intent = (
-                    cleaned_user_text.startswith("post") or 
-                    any(w in cleaned_user_text for w in ["social", "bhej", "send", "share", "channel"])
-                )
+                elif is_admin and relay_channel_id:
+                    composed = compose_relay_message(relay_instruction, relay_mentions, relay_channel_name, history)
+                    if composed:
+                        posted_ok = post_slack_message(relay_channel_id, composed)
+                        if posted_ok:
+                            dm_reply = f"Bhej diya <#{relay_channel_id}> mein:\n\n{composed}\n\n(Wapas lena ho to likhein: delete {relay_channel_name})"
+                        else:
+                            dm_reply = f"#{relay_channel_name} mein post nahi ho saka. Check karein ke bot us channel mein added hai."
+                    else:
+                        dm_reply = "Message compose nahi ho saka (AI busy hai). Thori der baad dobara try karein."
+                    post_slack_message(channel, dm_reply, thread_ts=thread_ts if not is_dm else None)
 
-                # 4. SOCIAL BROADCASTING COMMAND
+                # ==========================================
+                # 5. SOCIAL BROADCASTING COMMAND
+                # ==========================================
                 elif is_admin and (has_curr_links or has_hist_links) and has_social_intent:
                     # If current text doesn't contain the link, combine with history for AI
                     ai_input = text
