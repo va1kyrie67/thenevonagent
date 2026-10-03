@@ -450,7 +450,7 @@ eport: likh kar apne points bhein!"
                         prev_post = extract_last_social_post(history) if "extract_last_social_post" in globals() else None
                         if prev_post:
                             reply = prev_post
-                    reply = generate_ai_reply(text, history)
+                    
                     if is_admin:
                         if " at " in cleaned_user_text or " for " in cleaned_user_text or "schedule" in cleaned_user_text:
                             parsed_time = parse_time_to_epoch(cleaned_user_text)
