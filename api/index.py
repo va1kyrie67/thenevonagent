@@ -223,7 +223,7 @@ TEAM_DIRECTORY = {
 
 RELAY_VERBS = ["msg", "message", "bhej", "phenk", "phek", "follow up", "followup", "follow-up",
                "pooch", "puch", "pucho", "poocho", "bol", "keh", "kah", "tell", "ask", "remind",
-               "yaad", "status le", "update le", "inform", "bata"]
+               "yaad", "status le", "update le", "inform", "bata", "likh"]
 
 def get_bot_channels():
     try:
@@ -297,6 +297,29 @@ Ali's instruction: {instruction}"""
                 return msg
         except Exception as e:
             print(f"Relay compose error {model_name}:", e)
+            continue
+    return None
+
+def compose_dm_message(instruction, history_context=""):
+    prompt = f"""You are helping Ali extract the exact direct message he wants to send to someone.
+Ali gave you an instruction in Roman Urdu/English (e.g., 'umer ko likh hi lol' or 'umer ko msg karo hi lol').
+Extract ONLY the actual message meant for the person. Do NOT include the command part like 'umer ko likh' or 'isay keh'.
+Do NOT add any quotes or extra words. It should be exactly what Ali wants to tell them.
+
+Recent DM context:
+{history_context}
+
+Ali's instruction: {instruction}"""
+    if not ai_client:
+        return None
+    for model_name in MODEL_LIST:
+        try:
+            response = ai_client.models.generate_content(model=model_name, contents=prompt)
+            if response and response.text:
+                msg = response.text.strip().strip('"').replace("**", "")
+                return msg
+        except Exception as e:
+            print(f"DM compose error {model_name}:", e)
             continue
     return None
 
@@ -460,6 +483,7 @@ class handler(BaseHTTPRequestHandler):
                 )
 
                 relay_channel_id, relay_channel_name, relay_mentions, relay_instruction = None, None, [], ""
+                relay_dm_user_ids = []
                 bot_channels = []
                 is_command_word = cleaned_user_text.startswith(("delete", "undo", "remove", "schedule", "report", "status", "post"))
                 if is_admin and is_dm and not has_curr_links and not is_command_word and has_relay_intent(cleaned_user_text):
@@ -468,15 +492,23 @@ class handler(BaseHTTPRequestHandler):
                     source_text = cleaned_user_text
                     relay_instruction = clean_slack_text(text)
                     if not relay_channel_id:
-                        # Follow-up like "msg phenk na wahan pr": look back at Ali's recent messages
-                        user_lines = [l[len("User: "):] for l in history.split("\n") if l.startswith("User: ")]
-                        for prev in reversed(user_lines[:-1] if user_lines and user_lines[-1].lower() == cleaned_user_text else user_lines):
-                            cid, cname = find_channel_in_text(prev, bot_channels)
-                            if cid:
-                                relay_channel_id, relay_channel_name = cid, cname
-                                source_text = prev.lower() + " " + cleaned_user_text
-                                relay_instruction = prev + "\n(Follow-up: " + clean_slack_text(text) + ")"
-                                break
+                        relay_dm_user_ids = find_mentioned_users(source_text)
+                        if not relay_dm_user_ids:
+                            # Follow-up like "msg phenk na wahan pr": look back at Ali's recent messages
+                            user_lines = [l[len("User: "):] for l in history.split("\n") if l.startswith("User: ")]
+                            for prev in reversed(user_lines[:-1] if user_lines and user_lines[-1].lower() == cleaned_user_text else user_lines):
+                                cid, cname = find_channel_in_text(prev, bot_channels)
+                                if cid:
+                                    relay_channel_id, relay_channel_name = cid, cname
+                                    source_text = prev.lower() + " " + cleaned_user_text
+                                    relay_instruction = prev + "\n(Follow-up: " + clean_slack_text(text) + ")"
+                                    break
+                                uids = find_mentioned_users(prev.lower())
+                                if uids:
+                                    relay_dm_user_ids = uids
+                                    source_text = prev.lower() + " " + cleaned_user_text
+                                    relay_instruction = prev + "\n(Follow-up: " + clean_slack_text(text) + ")"
+                                    break
                     if relay_channel_id:
                         tagged = [u for u in re.findall(r'<@([A-Z0-9]+)>', text) if u != BOT_USER_ID]
                         relay_mentions = list(dict.fromkeys(tagged + find_mentioned_users(source_text)))
@@ -572,6 +604,32 @@ class handler(BaseHTTPRequestHandler):
                             dm_reply = f"#{relay_channel_name} mein post nahi ho saka. Check karein ke bot us channel mein added hai."
                     else:
                         dm_reply = "Message compose nahi ho saka (AI busy hai). Thori der baad dobara try karein."
+                    post_slack_message(channel, dm_reply, thread_ts=thread_ts if not is_dm else None)
+
+                # ==========================================
+                # 4b. USER DM RELAY (Admin asks bot to DM a user directly)
+                # ==========================================
+                elif is_admin and relay_dm_user_ids:
+                    composed = compose_dm_message(relay_instruction, history)
+                    if composed:
+                        success_users = []
+                        fail_users = []
+                        for uid in relay_dm_user_ids:
+                            if post_slack_message(uid, composed):
+                                success_users.append(uid)
+                            else:
+                                fail_users.append(uid)
+                        
+                        dm_reply = ""
+                        if success_users:
+                            mentions = " ".join(f"<@{u}>" for u in success_users)
+                            dm_reply += f"DM bhej diya inko: {mentions}\n\nMessage:\n{composed}"
+                        if fail_users:
+                            mentions = " ".join(f"<@{u}>" for u in fail_users)
+                            dm_reply += f"\n\nInko DM nahi ja saka: {mentions}"
+                    else:
+                        dm_reply = "Message extract nahi ho saka (AI busy hai). Thori der baad dobara try karein."
+                    
                     post_slack_message(channel, dm_reply, thread_ts=thread_ts if not is_dm else None)
 
                 # ==========================================
