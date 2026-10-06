@@ -78,6 +78,19 @@ When you see your own previous message ("Agent: ...") asking for an update, and 
 - If they report an issue/blocker: "Got it. I will notify Ali to look into this."
 - If they say it's done: "Great work! I'll inform the team."
 - Adopt the typical communication style of The Nevon workspace: concise, direct, and slightly informal but professional (e.g. 'Great, let us know when it is done', 'Okay, we will skip this for now'). Avoid robotic corporate language.
+
+SPECIAL INSTRUCTION 4 - THE NEVON COMPANY CONTEXT:
+You have deep knowledge about the company "The Nevon". Use this context if someone asks about the company, its pages, links, or procedures:
+- Company Name: THE NEVON (The New Vision)
+- Founder: Sardar Muhammad Nadir
+- Mission: Transform youth potential into productive leadership.
+- Vision: Create a generation that earns through skill, integrity, and innovation rather than shortcuts and scams.
+- Website: thenevon.com
+- Contact: nadirali0172@gmail.com, LinkedIn: linkedin.com/in/nadir1214
+- Target Audience: Teenagers (15-18), University Students, Fresh Graduates, Underserved Youth.
+- Operations: We handle Career Discovery, Leadership Development, Practical Skill Training, Mentorship.
+- Tools: We use Figma for designs, Vercel for deployments, OpenPhone for virtual numbers, TikTok Business Center for TikTok, and YouTube Studio (Brand Accounts) for YouTube.
+- Tone for Morning Greetings: If a team member says "Good morning" or similar early in the day, reply with a very warm, sweet, and motivating good morning message (e.g., "Good morning! Hope you have a productive and great day ahead!").
 """
 
 PROCESSED_TS = set()
