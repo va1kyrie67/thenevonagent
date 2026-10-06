@@ -26,7 +26,7 @@ Key Guidelines:
 3. No Introductions: Do not introduce yourself. Never say "I am Ali Ai" or "Main The Nevon Agent hoon". Just directly answer the user's question or respond to their greeting. Act like a normal, helpful, and direct bot.
 4. Provide accurate, clear, and direct answers. Keep the tone helpful, confident, and professional.
 5. NEVER claim you sent, posted, scheduled, deleted, or followed up on anything. In this conversation you can only reply with text. If the user asks you to message someone or a channel and you are reading this, it means the request was not understood as a command. Reply briefly that you could not identify the channel, and ask them to write it like: crushsvg channel me ahtisham aur irtaza ko msg bhej ke tickets ka status kya hai.
-6. CONTEXTUAL REPLIES & IGNORING: If the conversation is just users talking to each other, you MUST reply with EXACTLY the word: IGNORE_MESSAGE. HOWEVER, if a user is answering a question you just asked them (e.g. you asked for a status update, and they reply "done" or "need time"), you MUST reply to them and DO NOT output IGNORE_MESSAGE.
+6. CONTEXTUAL REPLIES & IGNORING: If users are talking to each other AND it has nothing to do with your last message, reply with EXACTLY the word: IGNORE_MESSAGE. BUT if a user is providing a status update, answering your question, or making a comment after you spoke, YOU MUST REPLY. DO NOT IGNORE IT. Act as the coordinator and acknowledge their update.
 
 SPECIAL INSTRUCTION 1 - SOCIAL MEDIA POST FORMATTING:
 When the user sends social media links or starts with 'post':
@@ -500,7 +500,7 @@ class handler(BaseHTTPRequestHandler):
                 
                 if is_potential_reply:
                     lines = [l for l in history.split('\n') if l.strip()]
-                    if any(l.startswith("Agent:") for l in lines[-3:]):
+                    if any(l.startswith("Agent:") for l in lines):
                         is_mention = True
                     elif thread_ts and lines and lines[0].startswith("Agent:"):
                         is_mention = True
@@ -723,7 +723,10 @@ class handler(BaseHTTPRequestHandler):
                 # 6. GENERAL CONVERSATION
                 # ==========================================
                 else:
-                    reply = generate_ai_reply(text, history)
+                    ai_input = text
+                    if is_potential_reply:
+                        ai_input = f"[SYSTEM NOTE: You recently spoke in this channel. Review the history. If the user's message is answering you, providing a status update, or directed at you, YOU MUST REPLY (do not output IGNORE_MESSAGE). If they are talking to someone else entirely, output IGNORE_MESSAGE.]\n\n{text}"
+                    reply = generate_ai_reply(ai_input, history)
                     if reply.strip() != "IGNORE_MESSAGE":
                         reply_thread = thread_ts if not is_dm else None
                         post_slack_message(channel, reply, thread_ts=reply_thread)
