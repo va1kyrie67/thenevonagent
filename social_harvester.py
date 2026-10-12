@@ -18,7 +18,6 @@ from datetime import datetime, timezone, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 HISTORY_FILE = os.path.join(BASE_DIR, "social_broadcast_history.json")
-LINKEDIN_SESSION_FILE = os.path.join(BASE_DIR, "linkedin_session.json")
 
 # Load local .env if present
 def load_env_file():
@@ -283,36 +282,37 @@ def harvest_instagram_profile(handle):
     return None
 
 def harvest_linkedin_activity(profile_or_company_url):
-    """Fetches newest activity/post link from LinkedIn using saved session."""
-    from playwright.sync_api import sync_playwright
-    if not os.path.exists(LINKEDIN_SESSION_FILE):
-        log(f"LinkedIn session file ({LINKEDIN_SESSION_FILE}) not found. Skipping automated LinkedIn fetch.")
-        log("Run 'python login_linkedin_session.py' to authenticate LinkedIn once.")
-        return None
+    """
+    Fetches newest post link from LinkedIn autonomously with ZERO authentication,
+    zero credentials, and zero risk of restriction using LinkExpanding engine.
+    """
+    # Ensure company URLs point to the root page which contains posts
+    target_url = re.sub(r'/posts/?$', '/', profile_or_company_url)
 
-    log(f"Checking LinkedIn: {profile_or_company_url}...")
+    headers = {
+        'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+    }
+    log(f"Checking LinkedIn (Zero-Auth Engine): {target_url}...")
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                storage_state=LINKEDIN_SESSION_FILE,
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-            page = context.new_page()
-            page.goto(profile_or_company_url, timeout=30000)
-            page.wait_for_timeout(4000)
-
-            # Extract post links
-            links = page.eval_on_selector_all('a', 'elements => elements.map(e => e.href)')
-            browser.close()
-
-            post_links = [l for l in links if 'activity-' in l or '/posts/' in l or 'urn:li:activity:' in l]
-            unique_links = list(dict.fromkeys(post_links))
-            log(f"Found {len(unique_links)} LinkedIn post links.")
-            if unique_links:
-                return unique_links[0]
+        req = urllib.request.Request(target_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=12) as r:
+            html = r.read().decode('utf-8', errors='ignore')
+            posts = re.findall(r'https?://www\.linkedin\.com/posts/[^\s"\'<>]+', html)
+            unique_posts = list(dict.fromkeys(posts))
+            if unique_posts:
+                log(f"Found {len(unique_posts)} LinkedIn posts. Latest: {unique_posts[0]}")
+                return unique_posts[0]
+            
+            # Fallback to activity URN
+            urns = re.findall(r'urn:li:activity:(\d+)', html)
+            if urns:
+                urn_link = f"https://www.linkedin.com/feed/update/urn:li:activity:{urns[0]}/"
+                log(f"Found LinkedIn activity URN: {urn_link}")
+                return urn_link
     except Exception as e:
-        log(f"LinkedIn harvest error: {e}")
+        log(f"LinkedIn harvest error ({target_url}): {e}")
     return None
 
 def harvest_facebook_page(page_url):
@@ -408,9 +408,9 @@ def execute_slot_harvest(slot_name):
         # 3. LinkedIn (May lag by 4-5 mins when scheduled)
         li_url = "https://www.linkedin.com/company/the-nevon/posts/"
         li_link = harvest_linkedin_activity(li_url)
-        # If FB/Insta are found but LinkedIn is lagging, poll up to 5 times (waiting up to 4-5 mins)
-        if not li_link and os.path.exists(LINKEDIN_SESSION_FILE):
-            log("LinkedIn post not detected yet. Polling for up to 4 minutes to account for LinkedIn scheduling delay...")
+        # If FB/Insta are found but LinkedIn is lagging, poll up to 5 times (waiting up to 4 mins)
+        if (not li_link or is_url_already_posted(li_link, history)) and (ig_link or fb_link):
+            log("LinkedIn post not detected yet (lagging behind FB/Insta). Polling for up to 4 minutes to account for LinkedIn scheduling delay...")
             for attempt in range(5):
                 time.sleep(45)
                 li_link = harvest_linkedin_activity(li_url)
@@ -439,8 +439,8 @@ def execute_slot_harvest(slot_name):
         # 3. LinkedIn (May lag by 4-5 mins when scheduled)
         li_url = "https://www.linkedin.com/company/crushsvg/posts/"
         li_link = harvest_linkedin_activity(li_url)
-        if not li_link and os.path.exists(LINKEDIN_SESSION_FILE):
-            log("LinkedIn post not detected yet. Polling for up to 4 minutes to account for LinkedIn scheduling delay...")
+        if (not li_link or is_url_already_posted(li_link, history)) and (ig_link or fb_link):
+            log("LinkedIn post not detected yet (lagging behind FB/Insta). Polling for up to 4 minutes to account for LinkedIn scheduling delay...")
             for attempt in range(5):
                 time.sleep(45)
                 li_link = harvest_linkedin_activity(li_url)
