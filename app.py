@@ -151,6 +151,24 @@ def check_and_reply():
                 processed_ts.add(ts)
                 log(f"\n[NEW SLACK EVENT] Channel: {cid} | User: {user} | Text: {text}")
 
+                # Check for instant social link drop in DM
+                social_match = bool(re.search(r'(?:https?://|lnkd\.in/|facebook\.com/|instagram\.com/)[^\s]+', text))
+                if is_im and social_match:
+                    found_urls = re.findall(r'(?:https?://[^\s<>"']+|lnkd\.in/[^\s<>"']+)', text)
+                    if found_urls:
+                        from social_harvester import format_batch_posts, CHANNEL_ID as SOCIAL_CID
+                        formatted = format_batch_posts(found_urls)
+                        slack_api_call("chat.postMessage", {
+                            "channel": SOCIAL_CID,
+                            "text": formatted
+                        })
+                        reply_text = f"Maine ye post #social channel mein bhej di hai! 📢✨\n\nPreview:\n{formatted}"
+                        slack_api_call("chat.postMessage", {
+                            "channel": cid,
+                            "text": reply_text
+                        })
+                        continue
+
                 reply_text = generate_ai_reply(text)
                 log(f"Generated AI Reply ({len(reply_text)} chars)")
 

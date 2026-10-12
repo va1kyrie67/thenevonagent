@@ -342,7 +342,106 @@ Ali's instruction: {instruction}"""
         except Exception as e:
             print(f"DM compose error {model_name}:", e)
             continue
-    return None
+def clean_social_url(url):
+    if not url:
+        return ""
+    try:
+        parsed = urllib.parse.urlparse(url)
+        qs = urllib.parse.parse_qs(parsed.query)
+        for p in ["trackingId", "ref", "utm_source", "utm_medium", "utm_campaign", "rcm"]:
+            qs.pop(p, None)
+        new_query = urllib.parse.urlencode(qs, doseq=True)
+        cleaned = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, ""))
+        return cleaned.rstrip("/")
+    except Exception:
+        return url.strip()
+
+def detect_platform(url):
+    lower = url.lower()
+    if "facebook.com" in lower or "fb.me" in lower or "fb.watch" in lower:
+        return "Facebook"
+    if "instagram.com" in lower or "instagr.am" in lower:
+        return "Insta"
+    if "linkedin.com" in lower or "lnkd.in" in lower:
+        return "Linkedin"
+    return "Social"
+
+def resolve_brand(url, brand_hint=None):
+    if brand_hint and brand_hint != "auto":
+        return brand_hint.lower()
+    lower = url.lower()
+    if "crushsvg" in lower:
+        return "crushsvg"
+    if "ali-aun" in lower:
+        return "ali"
+    if "sardar-muhammad-nadir" in lower or "nadir" in lower:
+        return "nadir"
+    if "thenevon" in lower or "the_nevon" in lower:
+        return "thenevon"
+    
+    # Generic URLs / shortlinks: resolve by current PKT time window
+    pkt = timezone(timedelta(hours=5))
+    now = datetime.now(pkt)
+    h = now.hour
+    m = now.minute
+
+    # 10:00 - 11:30 AM -> Nadir Bhai
+    if (h == 10) or (h == 11 and m < 30):
+        return "nadir"
+    # 11:30 AM - 12:45 PM -> Ali Aun
+    if (h == 11 and m >= 30) or (h == 12 and m < 45):
+        return "ali"
+    # 12:45 PM - 2:15 PM -> The Nevon
+    if (h == 12 and m >= 45) or (h == 13) or (h == 14 and m < 15):
+        return "thenevon"
+    # 2:15 PM - 4:30 PM -> CrushSVG
+    if (h == 14 and m >= 15) or (h == 15) or (h == 16 and m < 30):
+        return "crushsvg"
+    # 4:30 PM - 5:30 PM -> Nadir Bhai (2nd post)
+    if (h == 16 and m >= 30) or (h == 17 and m < 30):
+        return "nadir"
+    # 5:30 PM - 8:00 PM -> Ali Aun (2nd post)
+    if (h == 17 and m >= 30) or (h >= 18 and h <= 20):
+        return "ali"
+
+    return "thenevon"
+
+def format_single_post(url, brand_hint=None):
+    clean = clean_social_url(url)
+    if not clean:
+        return ""
+    brand = resolve_brand(clean, brand_hint)
+    platform = detect_platform(clean)
+
+    if brand == "nadir":
+        return f"Hey <!channel> ! must like and comment on this the post on Nadir bhai Linkedin Account.\n{clean}"
+    
+    if brand == "ali":
+        return f"Hey <!channel> ! must like and comment on this post.\n{clean}"
+    
+    if brand == "crushsvg":
+        if platform == "Insta":
+            return f"Hey <!channel> ! must like the new post on CrushSVG Insta Page, y'all should follow the page and like the post and today we will be giving red tickets and penalty to anyone who have not been interacting with our recent post and they would have to work overtime.\n{clean}"
+        elif platform == "Facebook":
+            return f"Hey <!channel> ! must like the new post on CrushSVG Facebook Page, y'all should follow the page and like the post and today we will be giving red tickets and penalty to anyone who have not been interacting with our recent post and they would have to work overtime.\n{clean}"
+        else:
+            return f"Hey <!channel> ! must like the new post on CrushSVG Linkedin Page, and today we will be giving red tickets and penalty to anyone who have not been interacting with our recent post and they would have to work overtime.\n{clean}"
+
+    # The Nevon Default
+    if platform == "Insta":
+        return f"Hey <!channel> ! must like this post on The Nevon instagram page, and today we will be giving red tickets and penalty to anyone who have not been interacting with our recent post and they would have to work overtime.\n{clean}"
+    elif platform == "Facebook":
+        return f"Hey <!channel> ! must like the new post on The Nevon Facebook Page, y'all should follow the page and like the post and today we will be giving red tickets and penalty to anyone who have not been interacting with our recent post and they would have to work overtime.\n{clean}"
+    else:
+        return f"Hey <!channel> ! must like the new post on The Nevon Linkedin Page, and today we will be giving red tickets and penalty to anyone who have not been interacting with our recent post and they would have to work overtime.\n{clean}"
+
+def format_batch_posts(urls, brand_hint=None):
+    blocks = []
+    for u in urls:
+        b = format_single_post(u, brand_hint)
+        if b:
+            blocks.append(b)
+    return "\n\n".join(blocks)
 
 def generate_ai_reply(user_text, history_context=""):
     clean_text = clean_slack_text(user_text)
@@ -460,6 +559,19 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"challenge": challenge}).encode())
             return
 
+        # Direct REST API Social Broadcaster Webhook
+        if data.get("action") == "broadcast":
+            links = data.get("links", [])
+            brand_hint = data.get("brand", "auto")
+            if links:
+                formatted = format_batch_posts(links, brand_hint)
+                posted_ok = post_slack_message(SOCIAL_CHANNEL_ID, formatted)
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": posted_ok, "text": formatted}).encode())
+                return
+
         event = data.get("event", {})
         event_type = event.get("type")
         user = str(event.get("user", ""))
@@ -519,7 +631,8 @@ class handler(BaseHTTPRequestHandler):
                 has_hist_links = bool(re.search(r'(?:https?://|lnkd\.in/|facebook\.com/|instagram\.com/)[^\s]+', history))
                 has_social_intent = (
                     cleaned_user_text.startswith("post") or
-                    any(w in cleaned_user_text for w in ["social", "bhej", "send", "share", "channel"])
+                    any(w in cleaned_user_text for w in ["social", "bhej", "send", "share", "channel"]) or
+                    (is_dm and has_curr_links)
                 )
 
                 relay_channel_id, relay_channel_name, relay_mentions, relay_instruction = None, None, [], ""
@@ -676,19 +789,16 @@ class handler(BaseHTTPRequestHandler):
                 # 5. SOCIAL BROADCASTING COMMAND
                 # ==========================================
                 elif is_admin and (has_curr_links or has_hist_links) and has_social_intent:
-                    # If current text doesn't contain the link, combine with history for AI
-                    ai_input = text
-                    if not has_curr_links and has_hist_links:
+                    found_urls = re.findall(r'(?:https?://[^\s<>"']+|lnkd\.in/[^\s<>"']+)', clean_slack_text(text))
+                    if found_urls:
+                        reply = format_batch_posts(found_urls)
+                    else:
                         ai_input = f"Format and post this to social based on recent context: {text}"
-                    
-                    reply = generate_ai_reply(ai_input, history)
-                    
-                    # Ensure reply contains formatted post
-                    if "Hey @channel" not in reply and "Hey <!channel>" not in reply:
-                        # Extract previous post from history if available
-                        prev_post = extract_last_social_post(history) if "extract_last_social_post" in globals() else None
-                        if prev_post:
-                            reply = prev_post
+                        reply = generate_ai_reply(ai_input, history)
+                        if "Hey <!channel>" not in reply and "Hey @channel" not in reply:
+                            prev_post = extract_last_social_post(history) if "extract_last_social_post" in globals() else None
+                            if prev_post:
+                                reply = prev_post
                     
                     if is_admin:
                         if " at " in cleaned_user_text or " for " in cleaned_user_text or "schedule" in cleaned_user_text:
@@ -696,13 +806,13 @@ class handler(BaseHTTPRequestHandler):
                             if parsed_time:
                                 epoch, formatted_time = parsed_time
                                 ok = schedule_slack_message(SOCIAL_CHANNEL_ID, reply, epoch)
-                                dm_reply = f"Social post aaj {formatted_time} baje ke liye schedule ho gayi hai! ?\n\nPreview:\n{reply}" if ok else f"Formatted text:\n\n{reply}"
+                                dm_reply = f"Social post aaj {formatted_time} baje ke liye schedule ho gayi hai! ⏰\n\nPreview:\n{reply}" if ok else f"Formatted text:\n\n{reply}"
                             else:
                                 posted_ok = post_slack_message(SOCIAL_CHANNEL_ID, reply)
-                                dm_reply = f"Maine ye post #social channel mein bhej di hai! ?\n\nPreview:\n{reply}" if posted_ok else f"Formatted text:\n\n{reply}"
+                                dm_reply = f"Maine ye post #social channel mein bhej di hai! 📢✨\n\nPreview:\n{reply}" if posted_ok else f"Formatted text:\n\n{reply}"
                         else:
                             posted_ok = post_slack_message(SOCIAL_CHANNEL_ID, reply)
-                            dm_reply = f"Maine ye post #social channel mein bhej di hai! ?\n\nPreview:\n{reply}" if posted_ok else f"Formatted text:\n\n{reply}"
+                            dm_reply = f"Maine ye post #social channel mein bhej di hai! 📢✨\n\nPreview:\n{reply}" if posted_ok else f"Formatted text:\n\n{reply}"
                     else:
                         dm_reply = f"Aap ke paas #social channel mein broadcast karne ki permission nahi hai. Sirf Ali Aun ye kar sakte hain.\n\nPreview:\n{reply}"
                     
