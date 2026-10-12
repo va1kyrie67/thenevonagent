@@ -370,13 +370,13 @@ def resolve_brand(url, brand_hint=None):
     if brand_hint and brand_hint != "auto":
         return brand_hint.lower()
     lower = url.lower()
-    if "crushsvg" in lower:
+    if "crushsvg" in lower or "61593405728605" in lower:
         return "crushsvg"
     if "ali-aun" in lower:
         return "ali"
-    if "sardar-muhammad-nadir" in lower or "nadir" in lower:
+    if "sardar-muhammad-nadir" in lower or "nadir" in lower or "nadir1214" in lower:
         return "nadir"
-    if "thenevon" in lower or "the_nevon" in lower:
+    if "thenevon" in lower or "the_nevon" in lower or "the-nevon" in lower or "61591527347235" in lower:
         return "thenevon"
     
     # Generic URLs / shortlinks: resolve by current PKT time window

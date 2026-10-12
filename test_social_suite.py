@@ -64,6 +64,24 @@ def test_clean_tracking():
     assert "ref" not in cleaned
     print("[PASS] URL tracking parameter sanitization verified!")
 
+def test_new_user_urls():
+    # Nadir 1214
+    nadir_res = format_single_post("https://www.linkedin.com/in/nadir1214/posts/test")
+    assert "Nadir bhai Linkedin Account" in nadir_res
+
+    # The Nevon FB ID 61591527347235
+    nevon_fb = format_single_post("https://www.facebook.com/photo/?fbid=122135732043384244&id=61591527347235")
+    assert "The Nevon Facebook Page" in nevon_fb
+
+    # CrushSVG FB ID 61593405728605
+    crush_fb = format_single_post("https://www.facebook.com/photo/?fbid=122119859937446857&id=61593405728605")
+    assert "CrushSVG Facebook Page" in crush_fb
+
+    # The Nevon LinkedIn company slug
+    nevon_li = format_single_post("https://www.linkedin.com/company/the-nevon/posts/")
+    assert "The Nevon Linkedin Page" in nevon_li
+    print("[PASS] User-confirmed brand profile URLs verified!")
+
 if __name__ == "__main__":
     print("Running Social Media Broadcaster Test Suite...")
     test_nadir_post()
@@ -71,4 +89,5 @@ if __name__ == "__main__":
     test_thenevon_batch()
     test_crushsvg_batch()
     test_clean_tracking()
-    print("\nALL 5 TEST SUITES PASSED 100% PERFECTLY!")
+    test_new_user_urls()
+    print("\nALL 6 TEST SUITES PASSED 100% PERFECTLY!")

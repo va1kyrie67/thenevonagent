@@ -145,13 +145,13 @@ def resolve_brand(url, brand_hint=None):
     if brand_hint and brand_hint != "auto":
         return brand_hint.lower()
     lower = url.lower()
-    if "crushsvg" in lower:
+    if "crushsvg" in lower or "61593405728605" in lower:
         return "crushsvg"
     if "ali-aun" in lower:
         return "ali"
-    if "sardar-muhammad-nadir" in lower or "nadir" in lower:
+    if "sardar-muhammad-nadir" in lower or "nadir" in lower or "nadir1214" in lower:
         return "nadir"
-    if "thenevon" in lower or "the_nevon" in lower:
+    if "thenevon" in lower or "the_nevon" in lower or "the-nevon" in lower or "61591527347235" in lower:
         return "thenevon"
     
     # Generic URLs / shortlinks: resolve by current PKT time window
@@ -377,8 +377,7 @@ def execute_slot_harvest(slot_name):
 
     if slot_name in ["10am_nadir", "5pm_nadir"]:
         brand_label = "Nadir Bhai"
-        # Check Nadir Bhai LinkedIn
-        nadir_url = "https://www.linkedin.com/in/sardar-muhammad-nadir/recent-activity/all/"
+        nadir_url = "https://www.linkedin.com/in/nadir1214/recent-activity/all/"
         link = harvest_linkedin_activity(nadir_url)
         if link and not is_url_already_posted(link, history):
             new_posts_to_broadcast.append(link)
@@ -386,7 +385,6 @@ def execute_slot_harvest(slot_name):
 
     elif slot_name in ["12pm_ali", "6pm_ali"]:
         brand_label = "Ali Aun"
-        # Check Ali Aun LinkedIn
         ali_url = "https://www.linkedin.com/in/ali-aun/recent-activity/all/"
         link = harvest_linkedin_activity(ali_url)
         if link and not is_url_already_posted(link, history):
@@ -395,18 +393,31 @@ def execute_slot_harvest(slot_name):
 
     elif slot_name == "1pm_thenevon":
         brand_label = "The Nevon"
-        # 1. Instagram
+        # 1. Instagram (Usually live immediately)
         ig_link = harvest_instagram_profile("the_nevon")
         if ig_link and not is_url_already_posted(ig_link, history):
             new_posts_to_broadcast.append(ig_link)
             record_posted_url(ig_link, "thenevon", "Insta", history)
+
         # 2. Facebook
-        fb_link = harvest_facebook_page("https://www.facebook.com/thenevon")
+        fb_link = harvest_facebook_page("https://www.facebook.com/people/The-Nevon/61591527347235/")
         if fb_link and not is_url_already_posted(fb_link, history):
             new_posts_to_broadcast.append(fb_link)
             record_posted_url(fb_link, "thenevon", "Facebook", history)
-        # 3. LinkedIn
-        li_link = harvest_linkedin_activity("https://www.linkedin.com/company/thenevon/posts/")
+
+        # 3. LinkedIn (May lag by 4-5 mins when scheduled)
+        li_url = "https://www.linkedin.com/company/the-nevon/posts/"
+        li_link = harvest_linkedin_activity(li_url)
+        # If FB/Insta are found but LinkedIn is lagging, poll up to 5 times (waiting up to 4-5 mins)
+        if not li_link and os.path.exists(LINKEDIN_SESSION_FILE):
+            log("LinkedIn post not detected yet. Polling for up to 4 minutes to account for LinkedIn scheduling delay...")
+            for attempt in range(5):
+                time.sleep(45)
+                li_link = harvest_linkedin_activity(li_url)
+                if li_link and not is_url_already_posted(li_link, history):
+                    log(f"LinkedIn post appeared after scheduling delay! Attempt {attempt+1}")
+                    break
+
         if li_link and not is_url_already_posted(li_link, history):
             new_posts_to_broadcast.append(li_link)
             record_posted_url(li_link, "thenevon", "Linkedin", history)
@@ -418,13 +429,25 @@ def execute_slot_harvest(slot_name):
         if ig_link and not is_url_already_posted(ig_link, history):
             new_posts_to_broadcast.append(ig_link)
             record_posted_url(ig_link, "crushsvg", "Insta", history)
+
         # 2. Facebook
-        fb_link = harvest_facebook_page("https://www.facebook.com/crushsvg")
+        fb_link = harvest_facebook_page("https://www.facebook.com/people/Crushsvg/61593405728605/")
         if fb_link and not is_url_already_posted(fb_link, history):
             new_posts_to_broadcast.append(fb_link)
             record_posted_url(fb_link, "crushsvg", "Facebook", history)
-        # 3. LinkedIn
-        li_link = harvest_linkedin_activity("https://www.linkedin.com/company/crushsvg/posts/")
+
+        # 3. LinkedIn (May lag by 4-5 mins when scheduled)
+        li_url = "https://www.linkedin.com/company/crushsvg/posts/"
+        li_link = harvest_linkedin_activity(li_url)
+        if not li_link and os.path.exists(LINKEDIN_SESSION_FILE):
+            log("LinkedIn post not detected yet. Polling for up to 4 minutes to account for LinkedIn scheduling delay...")
+            for attempt in range(5):
+                time.sleep(45)
+                li_link = harvest_linkedin_activity(li_url)
+                if li_link and not is_url_already_posted(li_link, history):
+                    log(f"LinkedIn post appeared after scheduling delay! Attempt {attempt+1}")
+                    break
+
         if li_link and not is_url_already_posted(li_link, history):
             new_posts_to_broadcast.append(li_link)
             record_posted_url(li_link, "crushsvg", "Linkedin", history)
