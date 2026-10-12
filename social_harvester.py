@@ -16,6 +16,10 @@ import urllib.request
 import urllib.parse
 from datetime import datetime, timezone, timedelta
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+HISTORY_FILE = os.path.join(BASE_DIR, "social_broadcast_history.json")
+LINKEDIN_SESSION_FILE = os.path.join(BASE_DIR, "linkedin_session.json")
+
 # Load local .env if present
 def load_env_file():
     env_path = os.path.join(BASE_DIR, ".env")
@@ -36,10 +40,6 @@ load_env_file()
 BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 CHANNEL_ID = os.environ.get("SLACK_SOCIAL_CHANNEL_ID", "C0B107Q0553")  # #social
 ADMIN_USER_ID = os.environ.get("SLACK_ADMIN_USER_ID", "U0BDPLQ226R")   # Ali Aun
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-HISTORY_FILE = os.path.join(BASE_DIR, "social_broadcast_history.json")
-LINKEDIN_SESSION_FILE = os.path.join(BASE_DIR, "linkedin_session.json")
 
 # Pakistan Timezone (PKT = UTC+5)
 PKT = timezone(timedelta(hours=5))
