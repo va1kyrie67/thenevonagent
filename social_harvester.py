@@ -471,6 +471,7 @@ def execute_slot_harvest(slot_name):
 def main():
     parser = argparse.ArgumentParser(description="Autonomous Social Media Broadcaster")
     parser.add_argument("--slot", choices=["auto", "10am_nadir", "12pm_ali", "1pm_thenevon", "3pm_crushsvg", "5pm_nadir", "6pm_ali"], default="auto")
+    parser.add_argument("--watch", action="store_true", help="Run in continuous background watchdog loop")
     parser.add_argument("--broadcast", help="Manual broadcast link(s) separated by spaces", nargs="+")
     parser.add_argument("--brand", choices=["auto", "nadir", "ali", "thenevon", "crushsvg"], default="auto")
     parser.add_argument("--test", choices=["instagram", "history", "format"], help="Run unit test")
@@ -523,6 +524,19 @@ def main():
         for item in h.get("history", [])[-5:]:
             print(" ", item)
         return
+
+    # Continuous Watchdog Mode
+    if args.watch:
+        log("Starting Continuous Watchdog Mode (monitoring every 60s during posting windows)...")
+        while True:
+            try:
+                current_slot = get_current_slot()
+                if current_slot != "idle":
+                    log(f"Watchdog active window detected: {current_slot}")
+                    execute_slot_harvest(current_slot)
+            except Exception as e:
+                log(f"Watchdog loop iteration error: {e}")
+            time.sleep(60)
 
     # Slot execution
     slot = args.slot
